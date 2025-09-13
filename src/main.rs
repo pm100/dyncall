@@ -13,18 +13,45 @@ use crate::{caller::DynCaller, dylib::DynamicLibrary, marshal::Marshaller};
 mod caller;
 mod dylib;
 mod marshal;
-fn main() {
+fn mainx() {
     let mut m = Marshaller::new();
-    m.push(1u32);
+    m.push(10u32);
     m.push(42u32);
     let (buf, mut ptr) = m.build_buffer();
     let mut d = DynCaller::new();
     let argsdef = vec![];
-    unsafe {
-        d.setup_call("kernel32.dll", "GetLastError", types::uint32, &argsdef)
+    let fid1 = unsafe {
+        d.define_function("kernel32.dll", "GetLastError", types::uint32, &argsdef)
             .unwrap()
     };
+    let mut argsdef: Vec<*mut ffi_type> = unsafe { vec![&mut types::uint32] };
+    let fid2 = unsafe {
+        d.define_function(
+            "C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll",
+            "test",
+            types::uint32,
+            &argsdef,
+        )
+        .unwrap()
+    };
+    let ret = d.call::<u32>(&fid2, &mut ptr).unwrap();
 
+    let mut argsdef: Vec<*mut ffi_type> = unsafe { vec![&mut types::pointer] };
+    let fid3 = unsafe {
+        d.define_function(
+            "C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll",
+            "testsay",
+            types::void,
+            &argsdef,
+        )
+        .unwrap()
+    };
+    let mut m = Marshaller::new();
+    m.push("hello");
+    let (buf, mut ptr) = m.build_buffer();
+    let ret = d.call::<u32>(&fid3, &mut ptr).unwrap();
+    println!("GetLastError: 0x{:08x}", ret);
+    //C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll
     let dyl = DynamicLibrary::open(Some(Path::new("kernel32.dll"))).unwrap();
     let glep: extern "C" fn() -> libc::c_uint = unsafe {
         std::mem::transmute::<*mut c_void, extern "C" fn() -> libc::c_uint>(
@@ -130,9 +157,7 @@ fn main() {
             sle_result.as_mut_ptr() as *mut c_void,
             sle_args.as_mut_ptr(),
         );
-        let ret = d
-            .call::<u32>("kernel32.dll", "GetLastError", &mut vec![])
-            .unwrap();
+        let ret = d.call::<u32>(&fid1, &mut vec![]).unwrap();
         println!("DynGetLastError: 0x{:08x}", ret);
         libffi::raw::ffi_call(
             &mut gle_cif,
@@ -142,15 +167,31 @@ fn main() {
         );
         println!("GetLastError: 0x{:08x}", gle_result.assume_init());
 
-        let ret = d
-            .call::<u32>("kernel32.dll", "GetLastError", &mut vec![])
-            .unwrap();
+        let ret = d.call::<u32>(&fid1, &mut vec![]).unwrap();
         println!("GetLastError: 0x{:08x}", ret);
         let ff = glep();
         println!("GetLastError: 0x{:08x}", ff);
     }
 }
-
+fn main() {
+    let mut dyncaller = DynCaller::new();
+    let mut m = Marshaller::new();
+    m.push(10u32);
+    m.push(42u32);
+    let (buf, mut ptr) = m.build_buffer();
+    let mut argsdef: Vec<*mut ffi_type> = unsafe { vec![&mut types::uint32] };
+    let fid2 = unsafe {
+        dyncaller
+            .define_function(
+                "C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll",
+                "test",
+                types::uint32,
+                &argsdef,
+            )
+            .unwrap()
+    };
+    dyncaller.call::<u32>(&fid2, &mut ptr).unwrap();
+}
 /*
 
 call "lib", "func",

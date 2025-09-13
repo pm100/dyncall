@@ -2,29 +2,41 @@ use std::collections::btree_map::OccupiedEntry;
 use std::collections::hash_map::Entry;
 use std::ffi::{self, c_void};
 use std::mem;
+use std::ops::Deref;
 use std::path::Path;
+use std::sync::Mutex;
 use std::{collections::HashMap, ptr};
 type RawLib = isize;
 use anyhow::Result;
 use anyhow::{anyhow, bail};
 use libffi::low::*;
+use libffi::middle::{Cif, Type};
 use libffi::raw::ffi_call;
 use libloading::os::windows::Library;
 
 use crate::dylib::DynamicLibrary;
-
+struct DynCallerData {
+    libs: HashMap<String, DynamicLibrary>,
+    //entry_points: HashMap<String, *mut ffi::c_void>,
+    //cifs: HashMap<String, ffi_cif>,
+    funcs: HashMap<String, (ffi_cif, *mut ffi::c_void)>,
+}
+//static GLOBAL_DATA: Mutex<DynCallerData> = Mutex::new();
 pub struct DynCaller {
     libs: HashMap<String, DynamicLibrary>,
-    entry_points: HashMap<String, *mut ffi::c_void>,
-    cifs: HashMap<String, ffi_cif>,
+    //entry_points: HashMap<String, *mut ffi::c_void>,
+    //cifs: HashMap<String, ffi_cif>,
+    funcs: HashMap<String, (ffi_cif, *mut ffi::c_void)>,
 }
 
+pub struct FunctionId(String);
 impl DynCaller {
     pub fn new() -> Self {
         DynCaller {
             libs: HashMap::new(),
-            entry_points: HashMap::new(),
-            cifs: HashMap::new(),
+            //entry_points: HashMap::new(),
+            // cifs: HashMap::new(),
+            funcs: HashMap::new(),
         }
     }
 
@@ -43,7 +55,7 @@ impl DynCaller {
         //     }
         // }
 
-        let lib = unsafe { DynamicLibrary::open(Some(Path::new(lib_name)))? };
+        let lib = DynamicLibrary::open(Some(Path::new(lib_name)))?;
 
         self.libs.insert(lib_name.to_string(), lib);
         // // return Ok(lib);
@@ -61,76 +73,53 @@ impl DynCaller {
         //     return Ok(self.entry_points.get(&name).unwrap().clone());
         // }
         let lib = self.get_lib(lib_name)?;
-        match self.entry_points.entry(name) {
-            Entry::Occupied(e) => {
-                return Ok(e.get().clone());
-            }
-            Entry::Vacant(e) => {
-                //let lib = self.get_lib(lib_name)?;
+        let ep = unsafe { lib.symbol(entry_point_name)? };
+        Ok(ep)
+        // match self.entry_points.entry(name) {
+        //     Entry::Occupied(e) => {
+        //         return Ok(e.get().clone());
+        //     }
+        //     Entry::Vacant(e) => {
+        //         //let lib = self.get_lib(lib_name)?;
 
-                let ep = unsafe { lib.symbol(entry_point_name)? };
-                let q = e.insert(ep);
-                //Ok(*q.clone())
-                Ok(ep)
-            }
-        }
-        //     let lib = self.get_lib(lib_name)?;
-        //     let x = unsafe { libloading::os::windows::Library::from_raw(lib) };
-        //     let y = libloading::Library::from(x);
-        //     //  let lib = unsafe { libloading::Library::from_raw(lib as *mut std::ffi::c_void) };
-        //     let entry_point: libloading::Symbol<unsafe extern "C" fn()> =
-        //         unsafe { y.get(entry_point_name.as_bytes())? };
-        //   //  self.entry_points.insert(name.clone(), entry_point);
-        //     return Ok(self.entry_points.get(&name).unwrap().clone());
-    }
-    fn get_cif(&mut self, lib_name: &str, entry_point: &str) -> Result<ffi_cif> {
-        let name = format!("{}::{}", lib_name, entry_point);
-        // if let Some(cif) = self.cifs.get(&name) {
-        //     return Ok(cif);
+        //         let ep = unsafe { lib.symbol(entry_point_name)? };
+        //         let q = e.insert(ep);
+        //         //Ok(*q.clone())
+        //         Ok(ep)
+        //     }
         // }
-        // let mut cif = Default::default();
-        // unsafe {
-        //     prep_cif(
-        //         &mut cif,
-        //         ffi_abi_FFI_DEFAULT_ABI,
-        //         0,
-        //         &mut types::void,
-        //         std::ptr::null_mut(),
-        //     )
-        //     .map_err(|e| anyhow!(format!("{:?}", e)))?;
-        // };
-        // self.cifs.insert(name.clone(), cif);
-        // Ok(self.cifs.get(&name).unwrap())
-
-        match self.cifs.entry(name) {
-            Entry::Occupied(e) => Ok((*e.get()).clone()),
-            Entry::Vacant(e) => {
-                let mut cif = Default::default();
-                unsafe {
-                    prep_cif(
-                        &mut cif,
-                        ffi_abi_FFI_DEFAULT_ABI,
-                        0,
-                        &mut types::void,
-                        std::ptr::null_mut(),
-                    )
-                    .map_err(|e| anyhow!(format!("{:?}", e)))?;
-                };
-                Ok(*e.insert(cif))
-                // Ok(e.get())
-            }
-        }
     }
-    pub fn setup_call(
+    // fn get_cif(&mut self, lib_name: &str, entry_point: &str) -> Result<ffi_cif> {
+    //     let name = format!("{}::{}", lib_name, entry_point);
+
+    //     match self.cifs.entry(name) {
+    //         Entry::Occupied(e) => Ok((*e.get()).clone()),
+    //         Entry::Vacant(e) => {
+    //             let mut cif = Default::default();
+    //             unsafe {
+    //                 prep_cif(
+    //                     &mut cif,
+    //                     ffi_abi_FFI_DEFAULT_ABI,
+    //                     0,
+    //                     &mut types::void,
+    //                     std::ptr::null_mut(),
+    //                 )
+    //                 .map_err(|e| anyhow!(format!("{:?}", e)))?;
+    //             };
+    //             Ok(*e.insert(cif))
+    //             // Ok(e.get())
+    //         }
+    //     }
+    // }
+    pub fn define_function(
         &mut self,
         lib_name: &str,
         entry_point_name: &str,
         mut return_type: ffi_type,
-        args: &Vec<&mut ffi_type>,
-    ) -> Result<()> {
+        args: &Vec<*mut ffi_type>,
+    ) -> Result<FunctionId> {
         let lib = self.get_lib(lib_name)?;
         let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
-        // let mut rt = types::uint8;
         let mut cif = Default::default();
         unsafe {
             prep_cif(
@@ -144,28 +133,51 @@ impl DynCaller {
             .map_err(|e| anyhow!(format!("{:?}", e)))?;
         };
         let name = format!("{}::{}", lib_name, entry_point_name);
-        self.cifs.insert(name, cif);
-        Ok(())
+        self.funcs.insert(name.clone(), (cif, entry_point));
+        Ok(FunctionId(name))
     }
-    pub fn call<T>(
+
+    pub fn define_middle_function(
         &mut self,
         lib_name: &str,
         entry_point_name: &str,
-        args: &mut Vec<*mut c_void>,
-    ) -> Result<T>
+        return_type: Type,
+        args: &Vec<Type>,
+    ) -> Result<FunctionId> {
+        let lib = self.get_lib(lib_name)?;
+        let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
+        // let mut cif = Default::default();
+        // let argsx = libffi::middle::types::TypeArray::new(args);
+        let cif = Cif::new(args.clone().into_iter(), return_type);
+        //     prep_cif(
+        //         &mut cif,
+        //         ffi_abi_FFI_DEFAULT_ABI,
+        //         args.len() as usize,
+        //         //ptr::addr_of_mut!(return_type), // as *mut ffi_type,
+        //         return_type,
+        //         args.into_iter(),
+        //     )
+        //     .map_err(|e| anyhow!(format!("{:?}", e)))?;
+        // };
+        let name = format!("{}::{}", lib_name, entry_point_name);
+        //  self.funcs.insert(name.clone(), (cif, entry_point));
+        Ok(FunctionId(name))
+    }
+    pub fn call<T>(&mut self, id: &FunctionId, args: &mut Vec<*mut c_void>) -> Result<T>
     where
         T: Default,
     {
-        let le = unsafe { GetLastError() };
-        let mut cif = self.get_cif(lib_name, entry_point_name)?;
-        let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
-
+        //let le = unsafe { GetLastError() };
+        // let mut cif = self.get_cif(lib_name, entry_point_name)?;
+        // let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
+        let (cif, entry_point) = self.funcs.get(&id.0).ok_or(anyhow!("not found"))?;
+        let mut cif = *cif;
         let mut result = mem::MaybeUninit::<T>::uninit();
         // let mut args = vec![&mut 99u32 as *mut _ as *mut c_void];
-        let ep = unsafe { std::mem::transmute(entry_point) };
-        unsafe {
-            SetLastError(le);
-        }
+        let ep = unsafe { std::mem::transmute(*entry_point) };
+        // unsafe {
+        //     SetLastError(le);
+        // }
         unsafe {
             ffi_call(
                 &mut cif,

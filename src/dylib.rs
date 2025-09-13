@@ -24,14 +24,14 @@ pub struct DynamicLibrary {
     handle: *mut u8,
 }
 
-impl Drop for DynamicLibrary {
-    fn drop(&mut self) {
-        match dl::check_for_errors_in(|| unsafe { dl::close(self.handle) }) {
-            Ok(()) => {}
-            Err(str) => panic!("{}", str),
-        }
-    }
-}
+// impl Drop for DynamicLibrary {
+//     fn drop(&mut self) {
+//         match dl::check_for_errors_in(|| unsafe { dl::close(self.handle) }) {
+//             Ok(()) => {}
+//             Err(str) => panic!("{}", str),
+//         }
+//     }
+// }
 
 impl DynamicLibrary {
     // FIXME (#12938): Until DST lands, we cannot decompose &str into
