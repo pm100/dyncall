@@ -179,21 +179,90 @@ fn main() {
     m.push(10u32);
     m.push(42u32);
     let (buf, mut ptr) = m.build_buffer();
-    let mut argsdef: Vec<*mut ffi_type> = unsafe { vec![&mut types::uint32] };
+    //let mut argsdef: Vec<*mut ffi_type> = unsafe { vec![&mut types::uint32] };
+    let argsdef = arg_gen("u32");
+    let retdef = type_gen("u32");
     let fid2 = unsafe {
         dyncaller
             .define_function(
-                "C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll",
+                "C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll", //VCRUNTIME140.dll
                 "test",
-                types::uint32,
+                *retdef,
                 &argsdef,
             )
             .unwrap()
     };
-    dyncaller.call::<u32>(&fid2, &mut ptr).unwrap();
+    let argsdef3 = arg_gen("ptr,ptr");
+    let retdef3 = type_gen("u64");
+    let fid3 = unsafe {
+        dyncaller
+            .define_function("msvcrt.dll", "fopen", *retdef3, &argsdef3)
+            .unwrap()
+    };
+    let argsdef4 = arg_gen("u64,ptr");
+    let retdef4 = type_gen("u64");
+    let fid4 = unsafe {
+        dyncaller
+            .define_function("msvcrt.dll", "fprintf", *retdef4, &argsdef4)
+            .unwrap()
+    };
+    let mut m = Marshaller::new();
+    // let ret = dyncaller.call::<u32>(&fid2, &mut ptr).unwrap();
+    // println!("ret={}", ret);
+    let name = c"test.txt";
+    let mode = c"w";
+    m.push(name.as_ptr() as u64);
+    m.push(mode.as_ptr() as u64);
+    let (buf, mut ptr) = m.build_buffer();
+    let ret = dyncaller.call::<u64>(&fid3, &mut ptr).unwrap();
+    println!("fopen ret={:x}", ret);
+
+    let mut m = Marshaller::new();
+    let text = c"Hello from Rust fprintf!\n";
+    m.push(ret); //FILE*
+    m.push(text.as_ptr() as u64); //const char*
+    let (buf, mut ptr) = m.build_buffer();
+    let ret = dyncaller.call::<u64>(&fid4, &mut ptr).unwrap();
+    println!("fopen ret={:x}", ret);
+}
+fn arg_gen(args: &str) -> Vec<*mut ffi_type> {
+    let mut argsdef: Vec<*mut ffi_type> = vec![];
+    for a in args.split(',') {
+        argsdef.push(type_gen(a));
+    }
+    argsdef
+}
+fn type_gen(at: &str) -> *mut ffi_type {
+    match at.trim() {
+        "u8" | "char" => &raw mut types::uint8,
+        "i8" => &raw mut types::sint8,
+        "u16" => &raw mut types::uint16,
+        "i16" => &raw mut types::sint16,
+        "u32" => &raw mut types::uint32,
+        "i32" => &raw mut types::sint32,
+        "u64" => &raw mut types::uint64,
+        "i64" => &raw mut types::sint64,
+        "f32" => &raw mut types::float,
+        "f64" => &raw mut types::double,
+        "ptr" | "*" => &raw mut types::pointer,
+        _ => panic!("unknown type {}", at),
+    }
 }
 /*
-
+        match a.trim() {
+            "u8" | "char" => argsdef.push(&raw mut types::uint8),
+            "i8" => argsdef.push(&raw mut types::sint8),
+            "u16" => argsdef.push(&raw mut types::uint16),
+            "i16" => argsdef.push(&raw mut types::sint16),
+            "u32" => argsdef.push(&raw mut types::uint32),
+            "i32" => argsdef.push(&raw mut types::sint32),
+            "u64" => argsdef.push(&raw mut types::uint64),
+            "i64" => argsdef.push(&raw mut types::sint64),
+            "f32" => argsdef.push(&raw mut types::float),
+            "f64" => argsdef.push(&raw mut types::double),
+            "ptr" | "*" => argsdef.push(&raw mut types::pointer),
+            _ => panic!("unknown type {}", a),
+        }
 call "lib", "func",
 
 

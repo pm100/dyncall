@@ -1,42 +1,184 @@
-use std::collections::btree_map::OccupiedEntry;
-use std::collections::hash_map::Entry;
-use std::ffi::{self, c_void};
+use std::ffi::{self, c_void, CStr, CString};
 use std::mem;
-use std::ops::Deref;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
+
 use std::{collections::HashMap, ptr};
-type RawLib = isize;
+
 use anyhow::Result;
 use anyhow::{anyhow, bail};
+use enum_as_inner::EnumAsInner;
+
 use libffi::low::*;
-use libffi::middle::{Cif, Type};
-use libffi::raw::ffi_call;
-use libloading::os::windows::Library;
+
+use libffi::raw::{
+    ffi_abi_FFI_DEFAULT_ABI, ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER,
+    FFI_TYPE_SINT16, FFI_TYPE_SINT32, FFI_TYPE_SINT64, FFI_TYPE_SINT8, FFI_TYPE_UINT16,
+    FFI_TYPE_UINT32, FFI_TYPE_UINT64, FFI_TYPE_UINT8,
+};
 
 use crate::dylib::DynamicLibrary;
-struct DynCallerData {
-    libs: HashMap<String, DynamicLibrary>,
-    //entry_points: HashMap<String, *mut ffi::c_void>,
-    //cifs: HashMap<String, ffi_cif>,
-    funcs: HashMap<String, (ffi_cif, *mut ffi::c_void)>,
-}
+//static DYNCALLER: LazyLock<DynCaller> = LazyLock::new(|| DynCaller::new());
 //static GLOBAL_DATA: Mutex<DynCallerData> = Mutex::new();
 pub struct DynCaller {
     libs: HashMap<String, DynamicLibrary>,
     //entry_points: HashMap<String, *mut ffi::c_void>,
     //cifs: HashMap<String, ffi_cif>,
-    funcs: HashMap<String, (ffi_cif, *mut ffi::c_void)>,
+    // funcs: HashMap<FunctionId, FuncDef>,
+}
+#[derive(EnumAsInner, Clone, Debug)]
+pub enum ArgVal {
+    Pointer(*mut c_void),
+    U64(u64),
+    F64(f64),
+    I64(i64),
+    I32(i32),
+    U32(u32),
+    I16(i16),
+    U16(u16),
+    F32(f32),
+    Char(u8),
+}
+impl ArgVal {
+    fn payload_ptr(&self) -> *mut c_void {
+        use ArgVal::*;
+        match self {
+            Pointer(ref val) => val as *const _ as *mut c_void,
+            U64(ref val) => val as *const _ as *mut c_void,
+            I32(ref val) => val as *const _ as *mut c_void,
+            U32(ref val) => val as *const _ as *mut c_void,
+            I16(ref val) => val as *const _ as *mut c_void,
+            U16(ref val) => val as *const _ as *mut c_void,
+            F32(ref val) => val as *const _ as *mut c_void,
+            F64(ref val) => val as *const _ as *mut c_void,
+            I64(ref val) => val as *const _ as *mut c_void,
+            Char(ref val) => val as *const _ as *mut c_void,
+            // _ => panic!("Unsupported ArgVal variant for payload_ptr"),
+            // ...
+        }
+    }
 }
 
-pub struct FunctionId(String);
+#[derive(Clone)]
+pub struct FuncDef {
+    cif: ffi_cif,
+    entry_point: unsafe extern "C" fn(),
+    arg_types: Vec<*mut ffi_type>,
+    return_type: ffi_type,
+    arg_ptrs: Vec<*mut c_void>,
+    arg_vals: Vec<ArgVal>,
+}
+
+pub trait ToArg {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void;
+}
+
+impl ToArg for CString {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        let ptr = self.as_ptr();
+        let p = unsafe { mem::transmute::<*const i8, *mut c_void>(ptr) };
+
+        func.arg_vals.push(ArgVal::Pointer(p));
+        let penum = &func.arg_vals[func.arg_vals.len() - 1];
+
+        penum.payload_ptr()
+    }
+}
+
+impl ToArg for CStr {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        let ptr = self.as_ptr();
+        println!("CStr to_arg: {:x}", ptr as u64);
+        let p = unsafe { mem::transmute::<*const i8, *mut c_void>(ptr) };
+
+        func.arg_vals.push(ArgVal::Pointer(p));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        println!("CStr to_arg ArgVal ptr: {:p}", pp);
+        let ppp = if let ArgVal::Pointer(ref p) = pp {
+            p
+        } else {
+            panic!("Expected Pointer ArgVal")
+        };
+        println!("CStr to_arg final ptr: {:p}", ppp);
+        unsafe { mem::transmute::<&*mut c_void, *mut c_void>(ppp) }
+    }
+}
+
+impl ToArg for u64 {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        func.arg_vals.push(ArgVal::U64(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for ArgVal {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        func.arg_vals.push(self.clone());
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+
+impl FuncDef {
+    pub fn push_arg<T>(&mut self, value: &T)
+    where
+        T: ToArg + ?Sized,
+    {
+        let argp = value.to_arg(self);
+        self.arg_ptrs.push(argp);
+    }
+    pub fn call<T>(&mut self) -> Result<T> {
+        let mut cif = self.cif;
+        let mut result = mem::MaybeUninit::<T>::uninit();
+
+        unsafe {
+            ffi_call(
+                &mut cif,
+                Some(self.entry_point),
+                result.as_mut_ptr() as *mut c_void,
+                self.arg_ptrs.as_mut_ptr(),
+            );
+        }
+
+        Ok(unsafe { result.assume_init() })
+    }
+    pub fn call2(&mut self) -> ArgVal {
+        let mut cif = self.cif;
+
+        let result = match self.return_type.type_ as u32 {
+            FFI_TYPE_POINTER => ArgVal::Pointer(ptr::null_mut()),
+            FFI_TYPE_UINT64 => ArgVal::U64(0),
+            FFI_TYPE_SINT64 => ArgVal::I64(0),
+            FFI_TYPE_UINT32 => ArgVal::U32(0),
+            FFI_TYPE_SINT32 => ArgVal::I32(0),
+            FFI_TYPE_SINT16 => ArgVal::I16(0),
+            FFI_TYPE_UINT16 => ArgVal::U16(0),
+            FFI_TYPE_UINT8 => ArgVal::Char(0),
+            FFI_TYPE_SINT8 => ArgVal::Char(0),
+            FFI_TYPE_FLOAT => ArgVal::F32(0.0),
+            FFI_TYPE_DOUBLE => ArgVal::F64(0.0),
+            _ => panic!("Unsupported return type"),
+        };
+
+        let addr = result.payload_ptr();
+        unsafe {
+            ffi_call(
+                &mut cif,
+                Some(self.entry_point),
+                addr, //as *mut c_void,
+                self.arg_ptrs.as_mut_ptr(),
+            );
+        }
+        self.arg_ptrs.clear();
+        self.arg_vals.clear();
+        result
+    }
+}
+
 impl DynCaller {
     pub fn new() -> Self {
         DynCaller {
             libs: HashMap::new(),
-            //entry_points: HashMap::new(),
-            // cifs: HashMap::new(),
-            funcs: HashMap::new(),
         }
     }
 
@@ -44,16 +186,6 @@ impl DynCaller {
         if self.libs.contains_key(lib_name) {
             return Ok(self.libs.get(lib_name).unwrap().clone());
         }
-        // let res = self
-        //     .libs
-        //     .entry(lib_name.to_string())
-        //     .or_insert_with(|| unsafe { libloading::Library::new(lib_name).unwrap() });
-
-        // {
-        //     if let Some(lib) = self.libs.get(lib_name) {
-        //         return Ok(lib);
-        //     }
-        // }
 
         let lib = DynamicLibrary::open(Some(Path::new(lib_name)))?;
 
@@ -67,114 +199,62 @@ impl DynCaller {
         lib_name: &str,
         entry_point_name: &str,
     ) -> Result<*mut ffi::c_void> {
-        let name = format!("{}::{}", lib_name, entry_point_name);
-
-        // if self.entry_points.contains_key(&name) {
-        //     return Ok(self.entry_points.get(&name).unwrap().clone());
-        // }
         let lib = self.get_lib(lib_name)?;
         let ep = unsafe { lib.symbol(entry_point_name)? };
         Ok(ep)
-        // match self.entry_points.entry(name) {
-        //     Entry::Occupied(e) => {
-        //         return Ok(e.get().clone());
-        //     }
-        //     Entry::Vacant(e) => {
-        //         //let lib = self.get_lib(lib_name)?;
-
-        //         let ep = unsafe { lib.symbol(entry_point_name)? };
-        //         let q = e.insert(ep);
-        //         //Ok(*q.clone())
-        //         Ok(ep)
-        //     }
-        // }
     }
-    // fn get_cif(&mut self, lib_name: &str, entry_point: &str) -> Result<ffi_cif> {
-    //     let name = format!("{}::{}", lib_name, entry_point);
 
-    //     match self.cifs.entry(name) {
-    //         Entry::Occupied(e) => Ok((*e.get()).clone()),
-    //         Entry::Vacant(e) => {
-    //             let mut cif = Default::default();
-    //             unsafe {
-    //                 prep_cif(
-    //                     &mut cif,
-    //                     ffi_abi_FFI_DEFAULT_ABI,
-    //                     0,
-    //                     &mut types::void,
-    //                     std::ptr::null_mut(),
-    //                 )
-    //                 .map_err(|e| anyhow!(format!("{:?}", e)))?;
-    //             };
-    //             Ok(*e.insert(cif))
-    //             // Ok(e.get())
-    //         }
-    //     }
-    // }
-    pub fn define_function(
-        &mut self,
-        lib_name: &str,
-        entry_point_name: &str,
-        mut return_type: ffi_type,
-        args: &Vec<*mut ffi_type>,
-    ) -> Result<FunctionId> {
-        let lib = self.get_lib(lib_name)?;
-        let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
-        let mut cif = Default::default();
+    pub fn define_function_by_str(&mut self, funcdef: &str) -> Result<FuncDef> {
+        let funcdef = funcdef.split("|").collect::<Vec<&str>>();
+        if funcdef.len() != 4 {
+            bail!("Invalid function definition format. Expected 'lib_name|entry_point_name|arg1,arg2,arg3|return_type'");
+        };
+        let lib_name = funcdef[0];
+        let entry_point_name = funcdef[1];
+        let args_str = funcdef[2];
+        let args = arg_gen(args_str);
+        let return_type_str = funcdef[3];
+        let return_type = unsafe { *type_gen(return_type_str) };
+
+        let ep = self.get_entry_point(lib_name, entry_point_name)?;
+        let entry_point = unsafe { std::mem::transmute(ep) };
+
+        let mut func = FuncDef {
+            cif: ffi_cif::default(),
+            entry_point,
+            arg_types: args.clone(),
+            return_type: return_type.clone(),
+            arg_vals: Vec::with_capacity(args.len()),
+
+            arg_ptrs: Vec::with_capacity(args.len()),
+        };
+
         unsafe {
             prep_cif(
-                &mut cif,
+                &mut func.cif,
                 ffi_abi_FFI_DEFAULT_ABI,
                 args.len() as usize,
-                //ptr::addr_of_mut!(return_type), // as *mut ffi_type,
-                &mut return_type,
-                args.as_ptr() as *mut *mut ffi_type,
+                &mut func.return_type,
+                func.arg_types.as_ptr() as *mut *mut ffi_type,
             )
             .map_err(|e| anyhow!(format!("{:?}", e)))?;
         };
-        let name = format!("{}::{}", lib_name, entry_point_name);
-        self.funcs.insert(name.clone(), (cif, entry_point));
-        Ok(FunctionId(name))
+
+        Ok(func)
     }
 
-    pub fn define_middle_function(
-        &mut self,
-        lib_name: &str,
-        entry_point_name: &str,
-        return_type: Type,
-        args: &Vec<Type>,
-    ) -> Result<FunctionId> {
-        let lib = self.get_lib(lib_name)?;
-        let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
-        // let mut cif = Default::default();
-        // let argsx = libffi::middle::types::TypeArray::new(args);
-        let cif = Cif::new(args.clone().into_iter(), return_type);
-        //     prep_cif(
-        //         &mut cif,
-        //         ffi_abi_FFI_DEFAULT_ABI,
-        //         args.len() as usize,
-        //         //ptr::addr_of_mut!(return_type), // as *mut ffi_type,
-        //         return_type,
-        //         args.into_iter(),
-        //     )
-        //     .map_err(|e| anyhow!(format!("{:?}", e)))?;
-        // };
-        let name = format!("{}::{}", lib_name, entry_point_name);
-        //  self.funcs.insert(name.clone(), (cif, entry_point));
-        Ok(FunctionId(name))
-    }
-    pub fn call<T>(&mut self, id: &FunctionId, args: &mut Vec<*mut c_void>) -> Result<T>
+    pub fn call<T>(&mut self, func_def: &FuncDef, args: &mut Vec<*mut c_void>) -> Result<T>
     where
         T: Default,
     {
         //let le = unsafe { GetLastError() };
         // let mut cif = self.get_cif(lib_name, entry_point_name)?;
         // let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
-        let (cif, entry_point) = self.funcs.get(&id.0).ok_or(anyhow!("not found"))?;
-        let mut cif = *cif;
+        //let func_def = self.funcs.get(&id).ok_or(anyhow!("not found"))?;
+        let mut cif = func_def.cif;
         let mut result = mem::MaybeUninit::<T>::uninit();
         // let mut args = vec![&mut 99u32 as *mut _ as *mut c_void];
-        let ep = unsafe { std::mem::transmute(*entry_point) };
+        let ep = unsafe { std::mem::transmute(func_def.entry_point) };
         // unsafe {
         //     SetLastError(le);
         // }
@@ -190,18 +270,120 @@ impl DynCaller {
         Ok(unsafe { result.assume_init() })
     }
 }
-#[allow(non_snake_case)]
-extern "system" {
-    fn SetLastError(error: libc::c_uint);
-    fn SetThreadErrorMode(uMode: libc::c_uint, oldMode: *mut libc::c_uint) -> libc::c_uint;
-    fn LoadLibraryW(name: *const libc::c_void) -> *mut libc::c_void;
-    fn GetModuleHandleExW(
-        dwFlags: libc::c_uint,
-        name: *const u16,
-        handle: *mut *mut libc::c_void,
-    ) -> libc::c_uint;
-    fn GetProcAddress(handle: *mut libc::c_void, name: *const libc::c_char) -> *mut libc::c_void;
-    fn FreeLibrary(handle: *mut libc::c_void);
-    fn SetErrorMode(uMode: libc::c_uint) -> libc::c_uint;
-    fn GetLastError() -> libc::c_uint;
+
+pub struct Args {
+    argsdef: Vec<*mut c_void>,
+}
+
+impl Args {
+    pub fn new() -> Self {
+        Args { argsdef: vec![] }
+    }
+    pub fn push<T>(&mut self, value: &T) {
+        unsafe {
+            self.argsdef
+                .push(mem::transmute::<*const T, *mut c_void>(value));
+        }
+    }
+}
+fn arg_gen(args: &str) -> Vec<*mut ffi_type> {
+    let mut argsdef: Vec<*mut ffi_type> = vec![];
+    for a in args.split(',') {
+        argsdef.push(type_gen(a));
+    }
+    argsdef
+}
+fn type_gen(at: &str) -> *mut ffi_type {
+    match at.trim() {
+        "u8" | "char" => &raw mut types::uint8,
+        "i8" => &raw mut types::sint8,
+        "u16" => &raw mut types::uint16,
+        "i16" => &raw mut types::sint16,
+        "u32" => &raw mut types::uint32,
+        "i32" => &raw mut types::sint32,
+        "u64" => &raw mut types::uint64,
+        "i64" => &raw mut types::sint64,
+        "f32" => &raw mut types::float,
+        "f64" => &raw mut types::double,
+        "ptr" | "*" => &raw mut types::pointer,
+        _ => panic!("unknown type {}", at),
+    }
+}
+
+#[test]
+fn test_caller() {
+    let mut dyncaller = DynCaller::new();
+    let mut fid = dyncaller
+        .define_function_by_str("msvcrt.dll|puts|ptr|i32")
+        .unwrap();
+    let str = CString::new("hello").unwrap();
+    //  str.to_call_arg(&mut fid);
+    fid.push_arg(&str);
+    println!("puts ret={}", fid.call::<u64>().unwrap());
+    let namex = CString::new("test.txt").unwrap();
+    let mode = CString::new("w").unwrap();
+    let mut fopen = dyncaller
+        .define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64")
+        .unwrap();
+    fopen.push_arg(&namex);
+    fopen.push_arg(&mode);
+    let ret = fopen.call2();
+    println!("fopen ret={:?}", ret);
+    let mut fputs = dyncaller
+        .define_function_by_str("msvcrt.dll|fputs|ptr,ptr|u64")
+        .unwrap();
+    let text = c"Hello from Rust fputs!\n";
+    fputs.push_arg(text);
+    fputs.push_arg(&ret);
+    let ret2 = fputs.call::<u64>().unwrap();
+}
+#[test]
+
+fn test_atoi() {
+    let mut dyncaller = DynCaller::new();
+    let mut atoi = dyncaller
+        .define_function_by_str("msvcrt.dll|atoi|ptr|i32")
+        .unwrap();
+    let str = CString::new("12345").unwrap();
+    atoi.push_arg(&str);
+    let ret = atoi.call2();
+    println!("atoi ret={:?}", ret);
+    assert_eq!(*ret.as_i32().unwrap(), 12345);
+}
+#[test]
+fn test_caller_str() {
+    let mut dyncaller = DynCaller::new();
+    let fopen = dyncaller
+        .define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64")
+        .unwrap();
+
+    let fputs = dyncaller
+        .define_function_by_str("msvcrt.dll|fputs|ptr,ptr|u64")
+        .unwrap();
+
+    //let mut m = Marshaller::new();
+    let name = c"test.txt2"; //.to_string();
+    let mode = c"w";
+    let pmode = mode.as_ptr(); // as *mut c_void;
+    let pname = name.as_ptr(); // as *mut c_void;
+    let _rp = &raw const pname;
+
+    let mut pvec: Vec<*mut c_void> = Vec::new();
+    pvec.push(unsafe { mem::transmute::<*const *const i8, *mut c_void>(&pname) });
+    //  pvec.push(name.to_call_arg());
+    pvec.push(unsafe { mem::transmute::<*const *const i8, *mut c_void>(&pmode) });
+    println!("pvec[0]={:x}", pvec[0] as u64);
+    println!("pvec[1]={:x}", pvec[1] as u64);
+    // let (buf, mut args) = m.build_buffer();
+    let ret = dyncaller.call::<u64>(&fopen, &mut pvec).unwrap();
+    println!("fopen ret={:x}", ret);
+
+    let text = c"Hello from Rust fputs!\n";
+    let ptext = text.as_ptr(); // as *mut c_void;
+    let mut pvec2: Vec<*mut c_void> = Vec::new();
+
+    pvec2.push(unsafe { mem::transmute::<*const *const i8, *mut c_void>(&ptext) });
+    pvec2.push(unsafe { mem::transmute::<*const u64, *mut c_void>(&ret) });
+    let ret2 = dyncaller.call::<u64>(&fputs, &mut pvec2).unwrap();
+    println!("fputs ret={:x}", ret2);
 }

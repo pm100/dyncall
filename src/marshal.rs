@@ -1,4 +1,7 @@
-use std::{ffi::c_void, mem};
+use std::{
+    ffi::{c_void, CStr},
+    mem,
+};
 
 pub struct Marshaller {
     obuffer: Vec<u8>,
@@ -32,6 +35,16 @@ impl Marshaller {
         self.pointers.push(self.obuffer.len());
         self.obuffer.extend_from_slice(slice);
     }
+
+    // pub fn push_cstr(&mut self, value: &CStr) {
+    //     let bytes = value.to_bytes_with_nul();
+    //     //  let bytes = cstring.to_bytes_with_nul();
+    //    // let size = bytes.len();
+    //    // let ptr = bytes.as_ptr();
+    //     let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
+    //     self.pointers.push(self.obuffer.len());
+    //     self.obuffer.extend_from_slice(slice);
+    // }
 
     // fn pop<T>(&mut self) -> T {
     //     let size = mem::size_of::<T>();
