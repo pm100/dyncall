@@ -39,6 +39,19 @@ pub enum ArgVal {
     F32(f32),
     Char(u8),
 }
+#[derive(Clone, Debug)]
+enum ArgType {
+    Pointer,
+    U64,
+    F64,
+    I64,
+    I32,
+    U32,
+    I16,
+    U16,
+    F32,
+    Char,
+}
 impl ArgVal {
     fn payload_ptr(&self) -> *mut c_void {
         use ArgVal::*;
@@ -247,6 +260,21 @@ impl DynCaller {
             entry_point,
             ffi_arg_types: args.clone(),
             ffi_return_type: return_type.clone(),
+            arg_types: vec![],
+            return_type: match return_type.type_ as u32 {
+                FFI_TYPE_POINTER => ArgType::Pointer,
+                FFI_TYPE_UINT64 => ArgType::U64,
+                FFI_TYPE_SINT64 => ArgType::I64,
+                FFI_TYPE_UINT32 => ArgType::U32,
+                FFI_TYPE_SINT32 => ArgType::I32,
+                FFI_TYPE_SINT16 => ArgType::I16,
+                FFI_TYPE_UINT16 => ArgType::U16,
+                FFI_TYPE_UINT8 => ArgType::Char,
+                FFI_TYPE_SINT8 => ArgType::Char,
+                FFI_TYPE_FLOAT => ArgType::F32,
+                FFI_TYPE_DOUBLE => ArgType::F64,
+                _ => panic!("Unsupported return type"),
+            },
             arg_vals: Vec::with_capacity(args.len()),
 
             arg_ptrs: Vec::with_capacity(args.len()),
