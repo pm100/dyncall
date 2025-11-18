@@ -63,8 +63,10 @@ impl ArgVal {
 pub struct FuncDef {
     cif: ffi_cif,
     entry_point: unsafe extern "C" fn(),
-    arg_types: Vec<*mut ffi_type>,
-    return_type: ffi_type,
+    ffi_arg_types: Vec<*mut ffi_type>,
+    ffi_return_type: ffi_type,
+    arg_types: Vec<ArgType>,
+    return_type: ArgType,
     arg_ptrs: Vec<*mut c_void>,
     arg_vals: Vec<ArgVal>,
 }
@@ -111,6 +113,27 @@ impl ToArg for u64 {
         pp.payload_ptr()
     }
 }
+impl ToArg for i64 {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        func.arg_vals.push(ArgVal::I64(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for u32 {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        func.arg_vals.push(ArgVal::U32(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for i32 {
+    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+        func.arg_vals.push(ArgVal::I32(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
 impl ToArg for ArgVal {
     fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
         func.arg_vals.push(self.clone());
@@ -145,7 +168,7 @@ impl FuncDef {
     pub fn call2(&mut self) -> ArgVal {
         let mut cif = self.cif;
 
-        let result = match self.return_type.type_ as u32 {
+        let result = match self.ffi_return_type.type_ as u32 {
             FFI_TYPE_POINTER => ArgVal::Pointer(ptr::null_mut()),
             FFI_TYPE_UINT64 => ArgVal::U64(0),
             FFI_TYPE_SINT64 => ArgVal::I64(0),
@@ -222,8 +245,8 @@ impl DynCaller {
         let mut func = FuncDef {
             cif: ffi_cif::default(),
             entry_point,
-            arg_types: args.clone(),
-            return_type: return_type.clone(),
+            ffi_arg_types: args.clone(),
+            ffi_return_type: return_type.clone(),
             arg_vals: Vec::with_capacity(args.len()),
 
             arg_ptrs: Vec::with_capacity(args.len()),
@@ -234,8 +257,8 @@ impl DynCaller {
                 &mut func.cif,
                 ffi_abi_FFI_DEFAULT_ABI,
                 args.len() as usize,
-                &mut func.return_type,
-                func.arg_types.as_ptr() as *mut *mut ffi_type,
+                &mut func.ffi_return_type,
+                func.ffi_arg_types.as_ptr() as *mut *mut ffi_type,
             )
             .map_err(|e| anyhow!(format!("{:?}", e)))?;
         };
@@ -288,8 +311,10 @@ impl Args {
 }
 fn arg_gen(args: &str) -> Vec<*mut ffi_type> {
     let mut argsdef: Vec<*mut ffi_type> = vec![];
-    for a in args.split(',') {
-        argsdef.push(type_gen(a));
+    if args.len() > 0 {
+        for a in args.split(',') {
+            argsdef.push(type_gen(a));
+        }
     }
     argsdef
 }
@@ -336,6 +361,52 @@ fn test_caller() {
     fputs.push_arg(text);
     fputs.push_arg(&ret);
     let ret2 = fputs.call::<u64>().unwrap();
+}
+#[test]
+fn test_stdout() {
+    let mut dyncaller = DynCaller::new();
+    let namex = CString::new("test.txt").unwrap();
+    let mode = CString::new("w").unwrap();
+    let mut fopen = dyncaller
+        .define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64")
+        .unwrap();
+    let mut errno = dyncaller
+        .define_function_by_str("msvcrt.dll|_errno||i32")
+        .unwrap();
+    let mut perror = dyncaller
+        .define_function_by_str("msvcrt.dll|perror|ptr|i32")
+        .unwrap();
+    fopen.push_arg(&namex);
+    fopen.push_arg(&mode);
+    let fh = fopen.call2();
+
+    let mut stdio = dyncaller
+        .define_function_by_str("ucrtbase|__acrt_iob_func|u32|u64")
+        .unwrap();
+    let mut gle = dyncaller
+        .define_function_by_str("kernel32|GetLastError||u32")
+        .unwrap();
+    let mut fputs = dyncaller
+        .define_function_by_str("msvcrt.dll|fputs|ptr,ptr|i32")
+        .unwrap();
+    let str = CString::new("hello stdout").unwrap();
+    stdio.push_arg(&1u32); // stdout index
+    let stdout_ptr = stdio.call2();
+    println!("stdout ptr={:x}", stdout_ptr.as_u64().unwrap());
+    println!("fh ptr={:x}", fh.as_u64().unwrap());
+    let ret = gle.call2();
+    println!("GetLastError after __acrt_iob_func: {:?}", ret);
+    fputs.push_arg(&str);
+    fputs.push_arg(&stdout_ptr);
+    let retf = fputs.call2();
+    perror.push_arg(&str);
+    perror.call2();
+    let err = errno.call2();
+    println!("errno before fputs: {:?}", err);
+    let ret = gle.call2();
+
+    println!("GetLastError after __acrt_iob_func: {:?}", ret);
+    println!("fputs ret={:?}", retf);
 }
 #[test]
 
