@@ -41,7 +41,8 @@ pub enum ArgVal {
 }
 #[derive(Clone, Debug)]
 enum ArgType {
-    Pointer,
+    OpaquePointer,
+    Pointer(Box<ArgType>),
     U64,
     F64,
     I64,
@@ -441,7 +442,7 @@ fn test_stdout() {
 fn test_atoi() {
     let mut dyncaller = DynCaller::new();
     let mut atoi = dyncaller
-        .define_function_by_str("msvcrt.dll|atoi|ptr|i32")
+        .define_function_by_str("libc.so.|atoi|ptr|i32")
         .unwrap();
     let str = CString::new("12345").unwrap();
     atoi.push_arg(&str);

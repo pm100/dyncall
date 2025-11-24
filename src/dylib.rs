@@ -13,6 +13,7 @@
 //! A simple wrapper over the platform's dynamic library facilities
 
 extern crate libc;
+use anyhow::bail;
 use anyhow::Result;
 
 use std::ffi::{CString, OsString};
@@ -191,13 +192,14 @@ impl DynamicLibrary {
     target_os = "openbsd"
 ))]
 mod dl {
+    use anyhow::bail;
+    use anyhow::Result;
     use libc;
     use std::ffi::{CStr, CString, OsStr};
     use std::os::unix::ffi::OsStrExt;
     use std::ptr;
     use std::str;
-
-    pub fn open(filename: Option<&OsStr>) -> Result<*mut u8, String> {
+    pub fn open(filename: Option<&OsStr>) -> Result<*mut u8> {
         check_for_errors_in(|| unsafe {
             match filename {
                 Some(filename) => open_external(filename),
@@ -217,19 +219,19 @@ mod dl {
         dlopen(ptr::null(), LAZY) as *mut u8
     }
 
-    pub fn check_for_errors_in<T, F>(f: F) -> Result<T, String>
+    pub fn check_for_errors_in<T, F>(f: F) -> Result<T>
     where
         F: FnOnce() -> T,
     {
         unsafe {
             let result = f();
 
-            let last_error = dlerror() as *const _;
+            let last_error = dlerror();
             if last_error.is_null() {
                 Ok(result)
             } else {
                 let s = CStr::from_ptr(last_error).to_bytes();
-                Err(str::from_utf8(s).unwrap().to_string())
+                bail!(str::from_utf8(s).unwrap().to_string())
             }
         }
     }
