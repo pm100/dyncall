@@ -31,10 +31,11 @@ mod test {
             .unwrap();
         let text = c"Hello from Rust fputs!\n";
         fputs.push_arg(text);
-        fputs.push_arg(&ret);
+        fputs.push_arg(ret.as_u64().unwrap());
         let ret2 = fputs.call2();
     }
     #[test]
+
     fn test_stdout() {
         let mut dyncaller = DynCaller::new();
         let namex = CString::new("test.txt").unwrap();
@@ -64,13 +65,14 @@ mod test {
         let str = CString::new("hello stdout").unwrap();
         stdio.push_arg(&1u32); // stdout index
         let stdout_ptr = stdio.call2();
-        println!("stdout ptr={:x}", stdout_ptr.as_u64().unwrap());
+        let stdout_ptr = stdout_ptr.as_u64().unwrap();
+        println!("stdout ptr={:x}", stdout_ptr);
         println!("fh ptr={:x}", fh.as_u64().unwrap());
         let ret = gle.call2();
         println!("GetLastError after __acrt_iob_func: {:?}", ret);
 
         fputs.push_arg(&str);
-        fputs.push_arg(&stdout_ptr);
+        fputs.push_arg(stdout_ptr);
         let retf = fputs.call2();
         if *retf.as_i32().unwrap() < 0 {
             perror.push_arg(&str);
@@ -134,15 +136,38 @@ mod test {
     //     let ret2 = dyncaller.call::<u64>(&fputs, &mut pvec2).unwrap();
     //     println!("fputs ret={:x}", ret2);
     // }
+    // #[test]
+    // fn test_fgets() {
+    //     let mut dyncaller = DynCaller::new();
+    //     let mut fopen = dyncaller
+    //         .define_function_by_str("msvcrt.dll|fopen|cstr,cstr|u64")
+    //         .unwrap();
+
+    //     let mut fgets = dyncaller
+    //         .define_function_by_str("msvcrt.dll|fgets|ocstr,i32,ptr|u64")
+    //         .unwrap();
+    //     let name = "test.txt2".to_string();
+    //     let mode = "r".to_string();
+    //     fopen.push_arg(&name);
+    //     fopen.push_arg(&mode);
+    //     let ret = fopen.call2();
+    //     println!("fopen ret={:x}", ret.as_u64().unwrap());
+    //     let mut buff = String::with_capacity(100);
+    //     fgets.push_mut_arg(&mut buff);
+    //     fgets.push_arg(&(100i32));
+    //    // fgets.push_arg(&ret);
+    //     let ret2 = fgets.call2();
+    //     println!("fgets ret={:x}", ret2.as_u64().unwrap());
+    // }
     #[test]
-    fn test_fgets() {
+    fn test_fread() {
         let mut dyncaller = DynCaller::new();
         let mut fopen = dyncaller
             .define_function_by_str("msvcrt.dll|fopen|cstr,cstr|u64")
             .unwrap();
 
-        let mut fgets = dyncaller
-            .define_function_by_str("msvcrt.dll|fgets|ocstr,i32,ptr|u64")
+        let mut fread = dyncaller
+            .define_function_by_str("msvcrt.dll|fgets|ocstr,i32,ptr|i32")
             .unwrap();
         let name = "test.txt2".to_string();
         let mode = "r".to_string();
@@ -150,11 +175,29 @@ mod test {
         fopen.push_arg(&mode);
         let ret = fopen.call2();
         println!("fopen ret={:x}", ret.as_u64().unwrap());
-        let mut buff = String::with_capacity(100);
-        fgets.push_mut_arg(&mut buff);
-        fgets.push_arg(&(100i32));
-        fgets.push_arg(&ret);
-        let ret2 = fgets.call2();
-        println!("fgets ret={:x}", ret2.as_u64().unwrap());
+        let mut buffer: String = String::with_capacity(100);
+        fread.push_mut_arg(&mut buffer);
+        fread.push_arg(&(50i32));
+        //fread.push_arg(&(0i32));
+        let ret = ret.as_u64().unwrap();
+        fread.push_arg(ret);
+        let ret2 = fread.call2();
+        println!("fread ret={:?}", ret2.as_i32().unwrap());
+        //let s = String::from_utf8_lossy(&buffer);
+        println!("buffer read: {}", buffer);
+    }
+    #[test]
+    fn testcpp() {
+        let mut dyncaller = DynCaller::new();
+        let mut atoi = dyncaller
+            .define_function_by_str("C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll|testgets|ocstr|i32")
+            .unwrap();
+
+        let mut buff = String::with_capacity(50);
+        //atoi.push_arg(&29);
+        atoi.push_mut_arg(&mut buff);
+        let ret = atoi.call2();
+        println!("atoi ret={:?}", buff);
+        //    assert_eq!(*ret.as_i32().unwrap(), 12345);
     }
 }

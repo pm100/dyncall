@@ -8,6 +8,7 @@ use anyhow::Result;
 use anyhow::{anyhow, bail};
 use enum_as_inner::EnumAsInner;
 
+use libc::strlen;
 use libffi::low::*;
 
 use libffi::raw::{
@@ -16,7 +17,7 @@ use libffi::raw::{
     FFI_TYPE_UINT32, FFI_TYPE_UINT64, FFI_TYPE_UINT8,
 };
 
-use crate::args::{type_gen, ArgType, ArgVal, ToArg};
+use crate::args::{type_gen, ArgType, ArgVal, ToArg, ToMutArg};
 use crate::dylib::DynamicLibrary;
 //static DYNCALLER: LazyLock<DynCaller> = LazyLock::new(|| DynCaller::new());
 //static GLOBAL_DATA: Mutex<DynCallerData> = Mutex::new();
@@ -27,8 +28,8 @@ pub struct DynCaller {
     // funcs: HashMap<FunctionId, FuncDef>,
 }
 
-#[derive(Clone)]
-pub struct FuncDef {
+//#[derive(Clone)]
+pub struct FuncDef<'argval> {
     cif: ffi_cif,
     entry_point: unsafe extern "C" fn(),
     ffi_arg_types: Vec<*mut ffi_type>,
@@ -36,23 +37,31 @@ pub struct FuncDef {
     pub(crate) arg_types: Vec<ArgType>,
     return_type: ArgType,
     pub(crate) arg_ptrs: Vec<*mut c_void>,
-    pub(crate) arg_vals: Vec<ArgVal>,
+    pub(crate) arg_vals: Vec<ArgVal<'argval>>,
 }
 
-impl FuncDef {
+impl<'argval> FuncDef<'argval> {
     pub fn push_arg<T>(&mut self, value: &T)
     where
-        T: ToArg + ?Sized,
+        T: ToArg<'argval> + ?Sized,
     {
         let argp = value.to_arg(self);
         self.arg_ptrs.push(argp);
     }
-    pub fn push_mut_arg<T>(&mut self, value: &mut T)
+    pub fn push_mut_arg<'a, T>(&'a mut self, value: &'argval mut T)
     where
-        T: ToArg + ?Sized,
+        T: ToMutArg<'argval> + ?Sized,
     {
-        let argp = value.to_arg(self);
+        let argp = value.to_mut_arg(self);
         self.arg_ptrs.push(argp);
+    }
+
+    pub fn get_arg_type(&self, index: usize) -> &ArgType {
+        &self.arg_types[index]
+    }
+
+    pub fn get_arg_count(&self) -> usize {
+        self.arg_types.len()
     }
     // pub fn call<T>(&mut self) -> Result<T> {
     //     let mut cif = self.cif;
@@ -96,9 +105,37 @@ impl FuncDef {
                 self.arg_ptrs.as_mut_ptr(),
             );
         }
+
+        self.post_process_args();
         self.arg_ptrs.clear();
         self.arg_vals.clear();
         result
+    }
+
+    fn post_process_args(&mut self) {
+        let mut val_idx = 0;
+        for (i, arg_type) in self.arg_types.iter().enumerate() {
+            match arg_type {
+                ArgType::OCString => {
+                    if let ArgVal::Pointer(p) = self.arg_vals[val_idx] {
+                        val_idx = val_idx + 1;
+                        //  let &mut str = *self.arg_vals[val_idx].as_rust_string_mut().unwrap();
+                        let arg_str = self.arg_vals.get_mut(val_idx).unwrap();
+                        let foo = arg_str.as_rust_string_mut().unwrap();
+                        if let ArgVal::RustString(str) = arg_str {
+                            unsafe {
+                                let len = strlen(p as *const i8);
+                                println!("fgets post_process_args len={}", len);
+                                str.as_mut_vec().set_len(len);
+                                // let rep_str = String::from_raw_parts(*p as *mut u8, len, cap);
+                            }
+                        }
+                    }
+                }
+                // Add more mutable types as needed
+                _ => {}
+            }
+        }
     }
 }
 
@@ -148,7 +185,11 @@ impl DynCaller {
     //         }
     //     }
     // }
-    pub fn define_function_by_str(&mut self, funcdef: &str) -> Result<FuncDef> {
+    pub fn define_function_by_str<'a, 'b, 'c>(
+        &'a mut self,
+        funcdef: &'b str,
+    ) -> Result<FuncDef<'c>> {
+        //pub fn define_function_by_str(&mut self, funcdef: &str) -> Result<FuncDef<'_>> {
         // TODO add conditional dll defs
         let funcdef = funcdef.split("|").collect::<Vec<&str>>();
         if funcdef.len() != 4 {
@@ -183,7 +224,7 @@ impl DynCaller {
             arg_vals: Vec::with_capacity(arg_count),
             arg_ptrs: Vec::with_capacity(arg_count),
         };
-        func.arg_vals.resize(arg_count, ArgVal::None);
+        //  func.arg_vals.resize(arg_count, ArgVal::None);
         unsafe {
             prep_cif(
                 &mut func.cif,

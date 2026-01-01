@@ -8,8 +8,8 @@ use libffi::{low::types, raw::ffi_type};
 
 use crate::FuncDef;
 
-#[derive(EnumAsInner, Clone, Debug)]
-pub enum ArgVal {
+#[derive(EnumAsInner, Debug)]
+pub enum ArgVal<'argval> {
     Pointer(*mut c_void),
     U64(u64),
     F64(f64),
@@ -21,10 +21,11 @@ pub enum ArgVal {
     F32(f32),
     Char(u8),
     CString(CString),
+    RustString(&'argval mut String),
     None,
 }
 #[derive(Clone, Debug)]
-pub(crate) enum ArgType {
+pub enum ArgType {
     OpaquePointer,         // void * , FILE*, HANDLE ....
     Pointer(Box<ArgType>), // &i32, &f64 ....
     U64,
@@ -39,7 +40,7 @@ pub(crate) enum ArgType {
     CString,  // classic c string
     OCString, // classic output c string (fgets, fscanf("%s"),...)
 }
-impl ArgVal {
+impl<'argval> ArgVal<'argval> {
     pub(crate) fn payload_ptr(&self) -> *mut c_void {
         // extracts a pointer to the data instide an ArgVal
         use ArgVal::*;
@@ -55,18 +56,19 @@ impl ArgVal {
             I64(ref val) => val as *const _ as *mut c_void,
             Char(ref val) => val as *const _ as *mut c_void,
             CString(ref val) => val.as_ptr() as *mut c_void,
+            RustString(ref val) => val.as_ptr() as *mut c_void,
             _ => panic!("Unsupported ArgVal variant for payload_ptr"),
             // ...
         }
     }
 }
-pub trait ToArg {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void;
+pub trait ToArg<'argval> {
+    fn to_arg(&self, func: &mut FuncDef<'argval>) -> *mut c_void;
 }
-pub trait ToMutArg {
-    fn to_mut_arg(&mut self, func: &mut FuncDef) -> *mut c_void;
+pub trait ToMutArg<'argval> {
+    fn to_mut_arg(&'argval mut self, func: &mut FuncDef<'argval>) -> *mut c_void;
 }
-impl ToArg for CString {
+impl<'argval> ToArg<'argval> for CString {
     fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
         let ptr = self.as_ptr();
         let p = unsafe { std::mem::transmute::<*const i8, *mut c_void>(ptr) };
@@ -76,8 +78,33 @@ impl ToArg for CString {
         penum.payload_ptr()
     }
 }
-impl ToArg for String {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+
+impl<'argval> ToMutArg<'argval> for String {
+    fn to_mut_arg(&'argval mut self, func: &mut FuncDef<'argval>) -> *mut c_void {
+        let arg_idx = func.arg_ptrs.len();
+        let arg_type = &func.arg_types[arg_idx];
+
+        match arg_type {
+            ArgType::OCString => {
+                let mut buffer = self.as_mut_ptr() as *mut c_void;
+                func.arg_vals.push(ArgVal::Pointer(buffer));
+                func.arg_vals.push(ArgVal::RustString(self));
+                let pp = &func.arg_vals[func.arg_vals.len() - 2];
+                let ppp = pp.payload_ptr();
+
+                // Store the buffer to keep it alive
+                //  func.arg_vals
+                //      .push(ArgVal::Pointer(buffer.as_mut_ptr() as *mut c_void));
+
+                //*(pp.as_pointer().unwrap()) as *mut c_void //buffer
+                ppp
+            }
+            _ => unreachable!("Expected pointer type for mutable string argument"),
+        }
+    }
+}
+impl<'a> ToArg<'a> for String {
+    fn to_arg(&self, func: &mut FuncDef<'a>) -> *mut c_void {
         let arg_idx = func.arg_ptrs.len();
         let arg_type = &func.arg_types[arg_idx];
 
@@ -111,8 +138,8 @@ impl ToArg for String {
         }
     }
 }
-impl ToArg for CStr {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+impl<'a> ToArg<'a> for CStr {
+    fn to_arg(&self, func: &mut FuncDef<'a>) -> *mut c_void {
         let ptr = self.as_ptr();
         println!("CStr to_arg: {:x}", ptr as u64);
         let p = unsafe { mem::transmute::<*const i8, *mut c_void>(ptr) };
@@ -130,41 +157,41 @@ impl ToArg for CStr {
     }
 }
 
-impl ToArg for u64 {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+impl<'a> ToArg<'a> for u64 {
+    fn to_arg(&self, func: &mut FuncDef<'a>) -> *mut c_void {
         func.arg_vals.push(ArgVal::U64(*self));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
     }
 }
-impl ToArg for i64 {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+impl<'a> ToArg<'a> for i64 {
+    fn to_arg(&self, func: &mut FuncDef<'a>) -> *mut c_void {
         func.arg_vals.push(ArgVal::I64(*self));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
     }
 }
-impl ToArg for u32 {
+impl<'a> ToArg<'a> for u32 {
     fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
         func.arg_vals.push(ArgVal::U32(*self));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
     }
 }
-impl ToArg for i32 {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
+impl<'a> ToArg<'a> for i32 {
+    fn to_arg(&self, func: &mut FuncDef<'a>) -> *mut c_void {
         func.arg_vals.push(ArgVal::I32(*self));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
     }
 }
-impl ToArg for ArgVal {
-    fn to_arg(&self, func: &mut FuncDef) -> *mut c_void {
-        func.arg_vals.push(self.clone());
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        pp.payload_ptr()
-    }
-}
+// impl<'a> ToMutArg<'a> for ArgVal<'a> {
+//     fn to_mut_arg(&mut self, func: &mut FuncDef<'a>) -> *mut c_void {
+//         func.arg_vals.push(*self);
+//         let pp = &func.arg_vals[func.arg_vals.len() - 1];
+//         pp.payload_ptr()
+//     }
+// }
 pub(crate) fn type_gen(at: &str) -> (*mut ffi_type, ArgType) {
     match at.strip_prefix('*') {
         Some(rest) => {
