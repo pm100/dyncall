@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::{env, ffi};
 #[derive(Clone)]
 pub struct DynamicLibrary {
-    handle: *mut u8,
+    handle: usize, //*mut u8,
 }
 
 // impl Drop for DynamicLibrary {
@@ -53,7 +53,9 @@ impl DynamicLibrary {
         // run.
         match maybe_library {
             Err(err) => Err(err),
-            Ok(handle) => Ok(DynamicLibrary { handle: handle }),
+            Ok(handle) => Ok(DynamicLibrary {
+                handle: handle as usize,
+            }),
         }
     }
 
@@ -116,7 +118,7 @@ impl DynamicLibrary {
 
         let raw_string = CString::new(symbol).unwrap();
         let maybe_symbol_value =
-            dl::check_for_errors_in(|| dl::symbol(self.handle, raw_string.as_ptr()));
+            dl::check_for_errors_in(|| dl::symbol(self.handle as *mut u8, raw_string.as_ptr()));
 
         // The value must not be constructed if there is an error so
         // the destructor does not run.

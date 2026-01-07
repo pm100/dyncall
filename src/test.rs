@@ -5,93 +5,76 @@ mod test {
     };
 
     use crate::DynCaller;
-    #[test]
-    fn test_caller() {
-        let mut dyncaller = DynCaller::new();
-        let mut fid = dyncaller
-            .define_function_by_str("msvcrt.dll|puts|ptr|i32")
-            .unwrap();
-        let str = CString::new("hello").unwrap();
-        //  str.to_call_arg(&mut fid);
-        let str = "hello".to_string();
-        fid.push_arg(&str);
-        fid.call2();
-        //println!("puts ret={}", fid.call::<u64>().unwrap());
-        let namex = CString::new("test.txt").unwrap();
-        let mode = CString::new("w").unwrap();
-        let mut fopen = dyncaller
-            .define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64")
-            .unwrap();
-        fopen.push_arg(&namex);
-        fopen.push_arg(&mode);
-        let ret = fopen.call2();
-        println!("fopen ret={:?}", ret);
-        let mut fputs = dyncaller
-            .define_function_by_str("msvcrt.dll|fputs|ptr,ptr|u64")
-            .unwrap();
-        let text = c"Hello from Rust fputs!\n";
-        fputs.push_arg(text);
-        fputs.push_arg(ret.as_u64().unwrap());
-        let ret2 = fputs.call2();
-    }
-    #[test]
+    // #[test]
+    // fn test_caller() {
+    //     //  let mut dyncaller = DynCaller::new();
+    //     let mut fid = DynCaller::define_function_by_str("msvcrt.dll|puts|ptr|i32|").unwrap();
+    //     let str = CString::new("hello").unwrap();
+    //     //  str.to_call_arg(&mut fid);
+    //     let str = "hello".to_string();
+    //     fid.push_arg(&str);
+    //     fid.call2();
+    //     //println!("puts ret={}", fid.call::<u64>().unwrap());
+    //     let namex = CString::new("test.txt").unwrap();
+    //     let mode = CString::new("w").unwrap();
+    //     let mut fopen = DynCaller::define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64|").unwrap();
+    //     fopen.push_arg(&namex);
+    //     fopen.push_arg(&mode);
+    //     let ret = fopen.call2();
+    //     println!("fopen ret={:?}", ret);
+    //     let mut fputs = DynCaller::define_function_by_str("msvcrt.dll|fputs|ptr,ptr|u64").unwrap();
+    //     let text = c"Hello from Rust fputs!\n";
+    //     fputs.push_arg(text);
+    //     fputs.push_arg(ret.as_u64().unwrap());
+    //     let ret2 = fputs.call2();
+    // }
+    // #[test]
 
-    fn test_stdout() {
-        let mut dyncaller = DynCaller::new();
-        let namex = CString::new("test.txt").unwrap();
-        let mode = CString::new("w").unwrap();
-        let mut fopen = dyncaller
-            .define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64")
-            .unwrap();
-        let mut errno = dyncaller
-            .define_function_by_str("msvcrt.dll|_errno||i32")
-            .unwrap();
-        let mut perror = dyncaller
-            .define_function_by_str("msvcrt.dll|perror|ptr|i32")
-            .unwrap();
-        fopen.push_arg(&namex);
-        fopen.push_arg(&mode);
-        let fh = fopen.call2();
+    // fn test_stdout() {
+    //     //        let mut dyncaller = DynCaller::new();
+    //     let namex = CString::new("test.txt").unwrap();
+    //     let mode = CString::new("w").unwrap();
+    //     let mut fopen = DynCaller::define_function_by_str("msvcrt.dll|fopen|ptr,ptr|u64|").unwrap();
+    //     let mut errno = DynCaller::define_function_by_str("msvcrt.dll|_errno||i32|").unwrap();
+    //     let mut perror = DynCaller::define_function_by_str("msvcrt.dll|perror|ptr|i32|").unwrap();
+    //     fopen.push_arg(&namex);
+    //     fopen.push_arg(&mode);
+    //     let fh = fopen.call2();
 
-        let mut stdio = dyncaller
-            .define_function_by_str("ucrtbase|__acrt_iob_func|u32|u64")
-            .unwrap();
-        let mut gle = dyncaller
-            .define_function_by_str("kernel32|GetLastError||u32")
-            .unwrap();
-        let mut fputs = dyncaller
-            .define_function_by_str("ucrtbase.dll|fputs|ptr,ptr|i32")
-            .unwrap();
-        let str = CString::new("hello stdout").unwrap();
-        stdio.push_arg(&1u32); // stdout index
-        let stdout_ptr = stdio.call2();
-        let stdout_ptr = stdout_ptr.as_u64().unwrap();
-        println!("stdout ptr={:x}", stdout_ptr);
-        println!("fh ptr={:x}", fh.as_u64().unwrap());
-        let ret = gle.call2();
-        println!("GetLastError after __acrt_iob_func: {:?}", ret);
+    //     let mut stdio =
+    //         DynCaller::define_function_by_str("ucrtbase|__acrt_iob_func|u32|u64|").unwrap();
+    //     let mut gle = DynCaller::define_function_by_str("kernel32|GetLastError||u32|").unwrap();
+    //     let mut fputs =
+    //         DynCaller::define_function_by_str("ucrtbase.dll|fputs|ptr,ptr|i32|").unwrap();
+    //     let str = CString::new("hello stdout").unwrap();
+    //     stdio.push_arg(&1u32); // stdout index
+    //     let stdout_ptr = stdio.call2();
+    //     let stdout_ptr = stdout_ptr.as_u64().unwrap();
+    //     println!("stdout ptr={:x}", stdout_ptr);
+    //     println!("fh ptr={:x}", fh.as_u64().unwrap());
+    //     let ret = gle.call2();
+    //     println!("GetLastError after __acrt_iob_func: {:?}", ret);
 
-        fputs.push_arg(&str);
-        fputs.push_arg(stdout_ptr);
-        let retf = fputs.call2();
-        if *retf.as_i32().unwrap() < 0 {
-            perror.push_arg(&str);
-            perror.call2();
-        }
-        let err = errno.call2();
-        println!("errno before fputs: {:?}", err);
-        let ret = gle.call2();
+    //     fputs.push_arg(&str);
+    //     fputs.push_arg(stdout_ptr);
+    //     let retf = fputs.call2();
+    //     if *retf.as_i32().unwrap() < 0 {
+    //         perror.push_arg(&str);
+    //         perror.call2();
+    //     }
+    //     let err = errno.call2();
+    //     println!("errno before fputs: {:?}", err);
+    //     let ret = gle.call2();
 
-        println!("GetLastError after __acrt_iob_func: {:?}", ret);
-        println!("fputs ret={:?}", retf);
-    }
+    //     println!("GetLastError after __acrt_iob_func: {:?}", ret);
+    //     println!("fputs ret={:?}", retf);
+    // }
     #[test]
 
     fn test_atoi() {
-        let mut dyncaller = DynCaller::new();
-        let mut atoi = dyncaller
-            .define_function_by_str("msvcrt.dll|atoi|ptr|i32")
-            .unwrap();
+        //   let mut dyncaller = DynCaller::new();
+        let atoidef = DynCaller::define_function_by_str("msvcrt.dll|atoi|cstr|i32|").unwrap();
+        let mut atoi = atoidef.prep();
         let str = CString::new("12345").unwrap();
         let str = "12345".to_string();
         atoi.push_arg(&str);
@@ -159,45 +142,79 @@ mod test {
     //     let ret2 = fgets.call2();
     //     println!("fgets ret={:x}", ret2.as_u64().unwrap());
     // }
-    #[test]
-    fn test_fread() {
-        let mut dyncaller = DynCaller::new();
-        let mut fopen = dyncaller
-            .define_function_by_str("msvcrt.dll|fopen|cstr,cstr|u64")
-            .unwrap();
+    // #[test]
+    // fn test_fread() {
+    //     //        let mut dyncaller = DynCaller::new();
+    //     let mut fopen =
+    //         DynCaller::define_function_by_str("msvcrt.dll|fopen|cstr,cstr|u64|").unwrap();
 
-        let mut fread = dyncaller
-            .define_function_by_str("msvcrt.dll|fgets|ocstr,i32,ptr|i32")
-            .unwrap();
-        let name = "test.txt2".to_string();
-        let mode = "r".to_string();
-        fopen.push_arg(&name);
-        fopen.push_arg(&mode);
-        let ret = fopen.call2();
-        println!("fopen ret={:x}", ret.as_u64().unwrap());
-        let mut buffer: String = String::with_capacity(100);
-        fread.push_mut_arg(&mut buffer);
-        fread.push_arg(&(50i32));
-        //fread.push_arg(&(0i32));
-        let ret = ret.as_u64().unwrap();
-        fread.push_arg(ret);
-        let ret2 = fread.call2();
-        println!("fread ret={:?}", ret2.as_i32().unwrap());
-        //let s = String::from_utf8_lossy(&buffer);
-        println!("buffer read: {}", buffer);
+    //     let mut fread =
+    //         DynCaller::define_function_by_str("msvcrt.dll|fgets|ocstr ,i32,ptr|i32|").unwrap();
+    //     let name = "test.txt2".to_string();
+    //     let mode = "r".to_string();
+    //     fopen.push_arg(&name);
+    //     fopen.push_arg(&mode);
+    //     let ret = fopen.call2();
+    //     println!("fopen ret={:x}", ret.as_u64().unwrap());
+    //     let mut buffer: String = String::with_capacity(100);
+    //     fread.push_mut_arg(&mut buffer);
+    //     fread.push_arg(&(50i32));
+    //     //fread.push_arg(&(0i32));
+    //     let ret = ret.as_u64().unwrap();
+    //     fread.push_arg(ret);
+    //     let ret2 = fread.call2();
+    //     println!("fread ret={:?}", ret2.as_i32().unwrap());
+    //     //let s = String::from_utf8_lossy(&buffer);
+    //     println!("buffer read: {}", buffer);
+    // }
+    // #[test]
+    // fn testcpp() {
+    //     let mut atoi = DynCaller::define_function_by_str(
+    //         "C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll|testgets|ocstr|i32|",
+    //     )
+    //     .unwrap();
+
+    //     let mut buff = String::with_capacity(50);
+    //     //atoi.push_arg(&29);
+    //     atoi.push_mut_arg(&mut buff);
+    //     let ret = atoi.call2();
+    //     println!("atoi ret={:?}", buff);
+    //     //    assert_eq!(*ret.as_i32().unwrap(), 12345);
+    // }
+    #[test]
+    fn test_printf() {
+        //let mut dyncaller = DynCaller::new();
+        let printf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|printf|cstr,cstr,i32|i32|vararg=1")
+                .unwrap();
+        let format = "Hello, %s! You are %d years old.\n".to_string();
+        let name = "Alice".to_string();
+        let age = 30i32;
+        let mut printf = printf_def.prep();
+        printf.push_arg(&format);
+        printf.push_arg(&name);
+        printf.push_arg(&age);
+
+        let ret = printf.call2();
+        println!("printf ret={:?}", ret.as_i32().unwrap());
     }
     #[test]
-    fn testcpp() {
-        let mut dyncaller = DynCaller::new();
-        let mut atoi = dyncaller
-            .define_function_by_str("C:\\work\\ffi\\Dll1\\x64\\Debug\\Dll1.dll|testgets|ocstr|i32")
-            .unwrap();
+    fn test_scanf() {
 
-        let mut buff = String::with_capacity(50);
-        //atoi.push_arg(&29);
-        atoi.push_mut_arg(&mut buff);
-        let ret = atoi.call2();
-        println!("atoi ret={:?}", buff);
-        //    assert_eq!(*ret.as_i32().unwrap(), 12345);
+
+        let instr = "hello world 42\n".to_string();
+        let sscanf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|sscanf|cstr,cstr,ocstr=50|i32|vararg=1")
+                .unwrap();
+        let format = "%s".to_string();
+
+        let mut ans = String::new();
+        let mut sscanf = sscanf_def.prep();
+        sscanf.push_arg(&instr);
+        sscanf.push_arg(&format);
+        sscanf.push_mut_arg(&mut ans);
+
+        let ret = sscanf.call2();
+        println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
     }
 }
