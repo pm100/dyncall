@@ -50,6 +50,15 @@ impl FuncDef {
             arg_vals: Vec::with_capacity(self.arg_types.len() * 4),
         }
     }
+    pub fn get_arg_count(&self) -> usize {
+        self.arg_types.len()
+    }
+    pub fn get_arg_type(&self, index: usize) -> &ArgType {
+        &self.arg_types[index]
+    }
+    pub fn get_return_type(&self) -> &ArgType {
+        &self.return_type
+    }
 }
 
 struct Flags {
@@ -252,7 +261,7 @@ fn type_gen(at: &str) -> (*mut ffi_type, ArgType) {
         None => { /* continue */ }
     }
     let (parsed_arg, qualifier) = parse_def(at);
-    match parsed_arg {
+    match parsed_arg.trim() {
         "u8" => (&raw mut types::uint8, ArgType::Char),
         "i8" => (&raw mut types::sint8, ArgType::Char),
         "u16" => (&raw mut types::uint16, ArgType::U16),
@@ -279,6 +288,21 @@ fn type_gen(at: &str) -> (*mut ffi_type, ArgType) {
             };
             (&raw mut types::pointer, ArgType::OCString(ldef))
         }
+        "obuff" => {
+            let ldef = if let Some(qual) = qualifier {
+                if qual.starts_with("arg") {
+                    let arg_idx: u8 = qual[3..].parse().unwrap();
+                    LengthDef::Arg(arg_idx)
+                } else {
+                    let fixed_len: usize = qual.parse().unwrap();
+                    LengthDef::Fixed(fixed_len)
+                }
+            } else {
+                LengthDef::None
+            };
+            (&raw mut types::pointer, ArgType::OByteBuffer(ldef))
+        }
+        "buff" => (&raw mut types::pointer, ArgType::ByteBuffer),
         "void" => (&raw mut types::void, ArgType::Void),
         _ => panic!("unknown type {}", at),
     }
