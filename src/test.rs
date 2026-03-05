@@ -100,7 +100,7 @@ mod test {
     fn test_scanf() {
         let instr = "hello world 42\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,ocstr=50|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,ocstr=50|i32|vararg=2"
         ))
         .unwrap();
         let format = "%s".to_string();
@@ -117,7 +117,7 @@ mod test {
     fn test_scanf_num_i32() {
         let instr = "42\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i32|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*i32|i32|vararg=2"
         ))
         .unwrap();
         let format = "%d".to_string();
@@ -136,7 +136,7 @@ mod test {
     fn test_scanf_num_u32() {
         let instr = "4294967295\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u32|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*u32|i32|vararg=2"
         ))
         .unwrap();
         let format = "%u".to_string();
@@ -155,7 +155,7 @@ mod test {
     fn test_scanf_num_u64() {
         let instr = "18446744073709551615\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u64|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*u64|i32|vararg=2"
         ))
         .unwrap();
         let format = "%llu".to_string();
@@ -174,7 +174,7 @@ mod test {
     fn test_scanf_num_i64() {
         let instr = "-9223372036854775808\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i64|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*i64|i32|vararg=2"
         ))
         .unwrap();
         let format = "%lld".to_string();
@@ -193,7 +193,7 @@ mod test {
     fn test_scanf_num_f32() {
         let instr = "3.14\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*f32|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*f32|i32|vararg=2"
         ))
         .unwrap();
         let format = "%f".to_string();
@@ -212,7 +212,7 @@ mod test {
     fn test_scanf_num_i16() {
         let instr = "32767\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i16|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*i16|i32|vararg=2"
         ))
         .unwrap();
         let format = "%hd".to_string();
@@ -231,7 +231,7 @@ mod test {
     fn test_scanf_num_u16() {
         let instr = "65535\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u16|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*u16|i32|vararg=2"
         ))
         .unwrap();
         let format = "%hu".to_string();
@@ -250,7 +250,7 @@ mod test {
     fn test_scanf_num_i8() {
         let instr = "127\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i8|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*i8|i32|vararg=2"
         ))
         .unwrap();
         let format = "%hhd".to_string();
@@ -269,7 +269,7 @@ mod test {
     fn test_scanf_num_u8() {
         let instr = "255\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u8|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*u8|i32|vararg=2"
         ))
         .unwrap();
         let format = "%hhu".to_string();
@@ -288,7 +288,7 @@ mod test {
     fn test_scanf_num_f64() {
         let instr = "3.14159\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*f64|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,*f64|i32|vararg=2"
         ))
         .unwrap();
         let format = "%lf".to_string();
@@ -308,7 +308,7 @@ mod test {
         let instr =
             "hello 42 4294967295 18446744073709551615 -9223372036854775808 3.14159\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,ocstr=50,*i32,*u32,*u64,*i64,*f64|i32|vararg=1"
+            "{LIBC}|sscanf|cstr,cstr,ocstr=50,*i32,*u32,*u64,*i64,*f64|i32|vararg=2"
         ))
         .unwrap();
         let format = "%s %d %u %llu %lld %lf".to_string();
