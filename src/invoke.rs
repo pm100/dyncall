@@ -2,7 +2,7 @@ use std::{ffi::c_void, ptr};
 
 use libc::strlen;
 use libffi::raw::{
-    ffi_abi_FFI_DEFAULT_ABI, ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER,
+    ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER,
     FFI_TYPE_SINT16, FFI_TYPE_SINT32, FFI_TYPE_SINT64, FFI_TYPE_SINT8, FFI_TYPE_UINT16,
     FFI_TYPE_UINT32, FFI_TYPE_UINT64, FFI_TYPE_UINT8,
 };
@@ -11,7 +11,6 @@ use crate::{
     args::{ArgType, LengthDef, ToArg, ToMutArg},
     ArgVal, FuncDef,
 };
-
 pub struct Invocation<'a> {
     pub(crate) func_def: &'a FuncDef,
     pub(crate) arg_ptrs: Vec<*mut c_void>,
@@ -180,11 +179,11 @@ impl<'a> Invocation<'a> {
     fn post_process_args(&mut self) {
         for (i, arg_type) in self.func_def.arg_types.iter().enumerate() {
             match arg_type {
-                ArgType::OCString(ldef) => {
+                ArgType::OCString(_ldef) => {
                     if let ArgVal::Pointer(p) = self.arg_vals[i * 2] {
                         //  let &mut str = *self.arg_vals[val_idx].as_rust_string_mut().unwrap();
                         let arg_str = self.arg_vals.get_mut(i * 2 + 1).unwrap();
-                        let foo = arg_str.as_rust_string_mut().unwrap();
+                        let _foo = arg_str.as_rust_string_mut().unwrap();
                         if let ArgVal::RustString(str) = arg_str {
                             unsafe {
                                 let len = strlen(p as *const i8);
@@ -198,7 +197,7 @@ impl<'a> Invocation<'a> {
                 }
                 ArgType::CString => {}
                 ArgType::OByteBuffer(_ldef) => {
-                    if let ArgVal::Pointer(p) = self.arg_vals[i * 2] {
+                    if let ArgVal::Pointer(_p) = self.arg_vals[i * 2] {
                         // let arg_str = self.arg_vals.get_mut(i * 2 + 1).unwrap();
                         // let foo = arg_str.as_rust_string_mut().unwrap();
                         // if let ArgVal::RustString(str) = arg_str {

@@ -2,6 +2,7 @@ mod args;
 pub mod caller;
 mod dylib;
 mod invoke;
+#[cfg(test)]
 mod test;
 //mod marshal;
 pub use args::ArgType;

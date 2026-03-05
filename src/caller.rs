@@ -1,24 +1,17 @@
-use std::ffi::{self, c_void, CStr, CString};
-use std::mem;
+use std::ffi;
 use std::path::Path;
 
 use std::sync::{LazyLock, Mutex};
-use std::{collections::HashMap, ptr};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use anyhow::{anyhow, bail};
-use enum_as_inner::EnumAsInner;
 
-use libc::strlen;
 use libffi::low::*;
 
-use libffi::raw::{
-    ffi_abi_FFI_DEFAULT_ABI, ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER,
-    FFI_TYPE_SINT16, FFI_TYPE_SINT32, FFI_TYPE_SINT64, FFI_TYPE_SINT8, FFI_TYPE_UINT16,
-    FFI_TYPE_UINT32, FFI_TYPE_UINT64, FFI_TYPE_UINT8,
-};
+use libffi::raw::ffi_abi_FFI_DEFAULT_ABI;
 
-use crate::args::{ArgType, ArgVal, LengthDef, ToArg, ToMutArg};
+use crate::args::{ArgType, LengthDef};
 use crate::dylib::DynamicLibrary;
 use crate::invoke::Invocation;
 static DYNCALLER: LazyLock<Mutex<DynCaller>> = LazyLock::new(|| Mutex::new(DynCaller::new()));
@@ -43,7 +36,7 @@ pub struct FuncDef {
     //val_offsets: Vec<u8>,
 }
 impl FuncDef {
-    pub fn prep(&self) -> Invocation {
+    pub fn prep(&self) -> Invocation<'_> {
         Invocation {
             func_def: self,
             arg_ptrs: Vec::with_capacity(self.arg_types.len()),
@@ -255,7 +248,7 @@ fn parse_def(def: &str) -> (&str, Option<&str>) {
 fn type_gen(at: &str) -> (*mut ffi_type, ArgType) {
     match at.strip_prefix('*') {
         Some(rest) => {
-            let (base_type, my_type) = type_gen(rest);
+            let (_base_type, my_type) = type_gen(rest);
             return (&raw mut types::pointer, ArgType::Pointer(Box::new(my_type)));
         }
         None => { /* continue */ }

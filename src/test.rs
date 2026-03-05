@@ -332,6 +332,106 @@ mod test {
     }
 
     #[test]
+    fn test_scanf_num_f32() {
+        let instr = "3.14\n".to_string();
+        let sscanf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|sscanf|cstr,cstr,*f32|i32|vararg=1")
+                .unwrap();
+        let format = "%f".to_string();
+
+        let mut ans = 0f32;
+        let mut sscanf = sscanf_def.prep();
+        sscanf.push_arg(&instr);
+        sscanf.push_arg(&format);
+        sscanf.push_mut_arg(&mut ans);
+
+        let ret = sscanf.call();
+        println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
+        assert!((ans - 3.14f32).abs() < 1e-4);
+        assert_eq!(*ret.as_i32().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_scanf_num_i16() {
+        let instr = "32767\n".to_string();
+        let sscanf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|sscanf|cstr,cstr,*i16|i32|vararg=1")
+                .unwrap();
+        let format = "%hd".to_string();
+
+        let mut ans = 0i16;
+        let mut sscanf = sscanf_def.prep();
+        sscanf.push_arg(&instr);
+        sscanf.push_arg(&format);
+        sscanf.push_mut_arg(&mut ans);
+
+        let ret = sscanf.call();
+        println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
+        assert_eq!(ans, 32767i16);
+        assert_eq!(*ret.as_i32().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_scanf_num_u16() {
+        let instr = "65535\n".to_string();
+        let sscanf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|sscanf|cstr,cstr,*u16|i32|vararg=1")
+                .unwrap();
+        let format = "%hu".to_string();
+
+        let mut ans = 0u16;
+        let mut sscanf = sscanf_def.prep();
+        sscanf.push_arg(&instr);
+        sscanf.push_arg(&format);
+        sscanf.push_mut_arg(&mut ans);
+
+        let ret = sscanf.call();
+        println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
+        assert_eq!(ans, 65535u16);
+        assert_eq!(*ret.as_i32().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_scanf_num_i8() {
+        let instr = "127\n".to_string();
+        let sscanf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|sscanf|cstr,cstr,*i8|i32|vararg=1")
+                .unwrap();
+        let format = "%hhd".to_string();
+
+        let mut ans = 0i8;
+        let mut sscanf = sscanf_def.prep();
+        sscanf.push_arg(&instr);
+        sscanf.push_arg(&format);
+        sscanf.push_mut_arg(&mut ans);
+
+        let ret = sscanf.call();
+        println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
+        assert_eq!(ans, 127i8);
+        assert_eq!(*ret.as_i32().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_scanf_num_u8() {
+        let instr = "255\n".to_string();
+        let sscanf_def =
+            DynCaller::define_function_by_str("msvcrt.dll|sscanf|cstr,cstr,*u8|i32|vararg=1")
+                .unwrap();
+        let format = "%hhu".to_string();
+
+        let mut ans = 0u8;
+        let mut sscanf = sscanf_def.prep();
+        sscanf.push_arg(&instr);
+        sscanf.push_arg(&format);
+        sscanf.push_mut_arg(&mut ans);
+
+        let ret = sscanf.call();
+        println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
+        assert_eq!(ans, 255u8);
+        assert_eq!(*ret.as_i32().unwrap(), 1);
+    }
+
+    #[test]
     fn test_scanf_num_f64() {
         let instr = "3.14159\n".to_string();
         let sscanf_def =

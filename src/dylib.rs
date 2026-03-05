@@ -13,7 +13,6 @@
 //! A simple wrapper over the platform's dynamic library facilities
 
 extern crate libc;
-use anyhow::bail;
 use anyhow::Result;
 
 use std::ffi::{CString, OsString};
@@ -33,7 +32,8 @@ pub struct DynamicLibrary {
 //         }
 //     }
 // }
-
+
+#[allow(dead_code)]
 impl DynamicLibrary {
     // FIXME (#12938): Until DST lands, we cannot decompose &str into
     // & and str, so we cannot usefully take ToCStr arguments by
@@ -190,7 +190,6 @@ impl DynamicLibrary {
     target_os = "ios",
     target_os = "freebsd",
     target_os = "dragonfly",
-    target_os = "bitrig",
     target_os = "openbsd"
 ))]
 mod dl {
@@ -264,20 +263,19 @@ mod dl {
     use std::option::Option::{self, None, Some};
     use std::os::windows::prelude::*;
     use std::ptr;
-    use std::string::String;
     // use std::sys::c::compat::kernel32::SetThreadErrorMode;
     //use std::sys::os;
     use std::vec::Vec;
 
     pub fn open(filename: Option<&OsStr>) -> Result<*mut u8> {
         // disable "dll load failed" error dialog.
-        let mut use_thread_mode = true;
+        let use_thread_mode = true;
         let prev_error_mode = unsafe {
             // SEM_FAILCRITICALERRORS 0x01
             let new_error_mode = 1;
             let mut prev_error_mode = 0;
             // Windows >= 7 supports thread error mode.
-            let result = SetThreadErrorMode(new_error_mode, &mut prev_error_mode);
+            let _result = SetThreadErrorMode(new_error_mode, &mut prev_error_mode);
             // if result == 0 {
             //     let err = os::errno();
             //     if err as libc::c_int == ERROR_CALL_NOT_IMPLEMENTED {
@@ -358,12 +356,12 @@ mod dl {
     pub unsafe fn symbol(handle: *mut u8, symbol: *const libc::c_char) -> *mut u8 {
         GetProcAddress(handle as *mut libc::c_void, symbol) as *mut u8
     }
+    #[allow(dead_code)]
     pub unsafe fn close(handle: *mut u8) {
         FreeLibrary(handle as *mut libc::c_void);
-        ()
     }
 
-    #[allow(non_snake_case)]
+    #[allow(non_snake_case, dead_code)]
     extern "system" {
         fn SetLastError(error: libc::size_t);
         fn SetThreadErrorMode(uMode: libc::c_uint, oldMode: *mut libc::c_uint) -> libc::c_uint;

@@ -4,9 +4,7 @@ use std::{
 };
 
 use enum_as_inner::EnumAsInner;
-use libffi::{low::types, raw::ffi_type};
-
-use crate::{invoke::Invocation, FuncDef};
+use crate::invoke::Invocation;
 
 #[derive(EnumAsInner, Debug, Clone)]
 pub enum ArgVal {
@@ -211,6 +209,38 @@ impl ToArg for i32 {
         pp.payload_ptr()
     }
 }
+impl ToArg for i16 {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals.push(ArgVal::I16(*self));
+        func.arg_vals.push(ArgVal::I16(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for u16 {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals.push(ArgVal::U16(*self));
+        func.arg_vals.push(ArgVal::U16(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for f32 {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals.push(ArgVal::F32(*self));
+        func.arg_vals.push(ArgVal::F32(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for f64 {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals.push(ArgVal::F64(*self));
+        func.arg_vals.push(ArgVal::F64(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
 impl ToMutArg for ArgVal {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
         func.arg_vals.push(self.clone());
@@ -276,6 +306,61 @@ impl ToMutArg for f64 {
             .push(ArgVal::Pointer(self as *mut f64 as *mut c_void));
         func.arg_vals
             .push(ArgVal::Pointer(self as *mut f64 as *mut c_void));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+
+impl ToMutArg for f32 {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut f32 as *mut c_void));
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut f32 as *mut c_void));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+
+impl ToMutArg for i16 {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut i16 as *mut c_void));
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut i16 as *mut c_void));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+
+impl ToMutArg for u16 {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut u16 as *mut c_void));
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut u16 as *mut c_void));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+
+impl ToMutArg for i8 {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut i8 as *mut c_void));
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut i8 as *mut c_void));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+
+impl ToMutArg for u8 {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut u8 as *mut c_void));
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut u8 as *mut c_void));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
     }
