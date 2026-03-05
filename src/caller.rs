@@ -15,14 +15,20 @@ use crate::args::{ArgType, LengthDef};
 use crate::dylib::DynamicLibrary;
 use crate::invoke::Invocation;
 static DYNCALLER: LazyLock<Mutex<DynCaller>> = LazyLock::new(|| Mutex::new(DynCaller::new()));
-//static GLOBAL_DATA: Mutex<DynCallerData> = Mutex::new();
+
+/// A singleton that manages loaded dynamic libraries.
+///
+/// `DynCaller` caches library handles so each library is only opened once.
+/// It is accessed through a global `LazyLock<Mutex<DynCaller>>` internally;
+/// you interact with it only via the static method [`DynCaller::define_function_by_str`].
 pub struct DynCaller {
     libs: HashMap<String, DynamicLibrary>,
-    //entry_points: HashMap<String, *mut ffi::c_void>,
-    //cifs: HashMap<String, ffi_cif>,
-    // funcs: HashMap<FunctionId, FuncDef>,
 }
 
+/// A compiled, reusable definition of a foreign function.
+///
+/// Created by [`DynCaller::define_function_by_str`]. A `FuncDef` is cheap to
+/// clone and can be used to create multiple independent [`Invocation`]s.
 #[derive(Clone)]
 pub struct FuncDef {
     pub(crate) cif: ffi_cif,
@@ -31,11 +37,11 @@ pub struct FuncDef {
     pub(crate) ffi_return_type: ffi_type,
     pub(crate) arg_types: Vec<ArgType>,
     pub(crate) return_type: ArgType,
-    // pub(crate) arg_ptrs: Vec<*mut c_void>,
-    // pub(crate) arg_vals: Vec<ArgVal>,
-    //val_offsets: Vec<u8>,
 }
 impl FuncDef {
+    /// Create an [`Invocation`] ready to accept arguments for this function.
+    ///
+    /// Call this once per invocation; the `Invocation` is consumed by the call.
     pub fn prep(&self) -> Invocation<'_> {
         Invocation {
             func_def: self,
@@ -43,12 +49,15 @@ impl FuncDef {
             arg_vals: Vec::with_capacity(self.arg_types.len() * 4),
         }
     }
+    /// Returns the number of declared arguments.
     pub fn get_arg_count(&self) -> usize {
         self.arg_types.len()
     }
+    /// Returns the [`ArgType`] for the argument at `index`.
     pub fn get_arg_type(&self, index: usize) -> &ArgType {
         &self.arg_types[index]
     }
+    /// Returns the declared return [`ArgType`].
     pub fn get_return_type(&self) -> &ArgType {
         &self.return_type
     }
@@ -104,6 +113,32 @@ impl DynCaller {
     //         }
     //     }
     // }
+    /// Parse a function descriptor string, load the library, and return a [`FuncDef`].
+    ///
+    /// # Descriptor format
+    ///
+    /// ```text
+    /// "library|function|arg1,arg2,...|return_type|flags"
+    /// ```
+    ///
+    /// All five `|`-separated fields are required (the last two may be empty).
+    ///
+    /// See the [crate-level documentation](crate) for the full list of type tokens and flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the descriptor is malformed, the library cannot be
+    /// loaded, or the symbol cannot be found.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dyncall::DynCaller;
+    /// // printf(const char *fmt, ...) → int
+    /// let def = DynCaller::define_function_by_str(
+    ///     "msvcrt.dll|printf|cstr,i32|i32|vararg=1"
+    /// ).unwrap();
+    /// ```
     pub fn define_function_by_str(funcdef: &str) -> Result<FuncDef> {
         //pub fn define_function_by_str(&mut self, funcdef: &str) -> Result<FuncDef<'_>> {
         // TODO add conditional dll defs

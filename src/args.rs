@@ -6,6 +6,12 @@ use std::{
 use enum_as_inner::EnumAsInner;
 use crate::invoke::Invocation;
 
+/// A runtime value held while preparing or executing a call.
+///
+/// Each argument is represented twice in the internal stack: once for
+/// ownership/lifetime and once for the pointer that libffi reads from.
+/// Users do not construct `ArgVal` directly in most cases; it is produced
+/// by the [`ToArg`] and [`ToMutArg`] trait implementations.
 #[derive(EnumAsInner, Debug, Clone)]
 pub enum ArgVal {
     Pointer(*mut c_void),
@@ -23,15 +29,25 @@ pub enum ArgVal {
     ByteBuffer(*mut Vec<u8>),
     None,
 }
+
+/// Describes how the length of an output buffer is determined.
 #[derive(Clone, Debug)]
 pub enum LengthDef {
+    /// Length is not specified; the buffer must already be large enough.
     None,
+    /// Length is taken from another argument at the given zero-based index.
     Arg(u8),
+    /// Length is a fixed number of bytes.
     Fixed(usize),
 }
+
+/// Describes the type of a single argument or return value in a [`FuncDef`](crate::FuncDef).
+///
+/// These are produced automatically by [`DynCaller::define_function_by_str`](crate::DynCaller::define_function_by_str)
+/// from the type tokens in the descriptor string (see crate-level docs).
 #[derive(Clone, Debug)]
 pub enum ArgType {
-    // scalar types
+    // ── scalar input types ────────────────────────────────────────────────
     U64,
     F64,
     I64,
@@ -40,18 +56,27 @@ pub enum ArgType {
     I16,
     U16,
     F32,
+    /// Single byte (`u8` / `i8`).
     Char,
 
-    // complex types
-    CString,                // classic c string
-    OCString(LengthDef),    // classic output c string (fgets, fscanf("%s"),...)
-    ByteBuffer,             // buffer for writing raw bytes
-    OByteBuffer(LengthDef), // Buffer for reading raw bytes
-    OpaquePointer,          // void * , FILE*, HANDLE ....
-    Pointer(Box<ArgType>),  // &i32, &f64 ....
+    // ── complex types ─────────────────────────────────────────────────────
+    /// Input null-terminated C string (`const char *`). Push with a `String`.
+    CString,
+    /// Output C string buffer written by the callee (e.g. `fgets`, `sscanf %s`).
+    /// The optional `LengthDef` controls buffer pre-allocation.
+    OCString(LengthDef),
+    /// Input raw byte buffer.
+    ByteBuffer,
+    /// Output raw byte buffer written by the callee (e.g. `fread`).
+    OByteBuffer(LengthDef),
+    /// Opaque pointer (`void *`, `FILE *`, `HANDLE`, …).
+    OpaquePointer,
+    /// Typed output pointer (`&mut T`). Use `*T` in the descriptor string.
+    Pointer(Box<ArgType>),
+    /// No value (only valid as a return type).
     Void,
 
-    // specials
+    // ── specials ──────────────────────────────────────────────────────────
     Stdin,
     Stdout,
     Stderr,
@@ -85,9 +110,21 @@ impl ArgVal {
         }
     }
 }
+/// Trait for types that can be passed as input arguments to a dynamic call.
+///
+/// Implemented for: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`,
+/// `f32`, `f64`, `String`, `CStr`, [`ArgVal`].
 pub trait ToArg {
     fn to_arg(&self, func: &mut Invocation) -> *mut c_void;
 }
+
+/// Trait for types that can be passed as output (pointer) arguments to a dynamic call.
+///
+/// The callee writes its result through the pointer. After the call returns,
+/// the value is available in the original variable.
+///
+/// Implemented for: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`,
+/// `f32`, `f64`, `String`, [`ArgVal`].
 pub trait ToMutArg {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void;
 }
