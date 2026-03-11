@@ -64,6 +64,21 @@ All five `|`-separated fields are required (the last two may be empty).
 | `*T`                   | output pointer `T *` (e.g. `*i32`, `*f64`)         |
 | `void`                 | no return value                                    |
 
+### Output buffer sizing (`ocstr` and `obuff`)
+
+For output string and byte-buffer arguments, `dyncall` needs to know how large a buffer to allocate before making the call, because the C function writes into the buffer without knowing Rust's allocation. There are two ways to specify the size:
+
+- **`=N`** — allocate a fixed buffer of exactly N bytes (e.g. `ocstr=256`).
+- **`=argK`** — read the size at call time from argument K (zero-based index). Use this when the buffer size is passed as a separate argument to the same function, as is conventional in many C APIs (e.g. `GetTempPathA(nBufferLength, lpBuffer)`).
+
+```
+"kernel32.dll|GetTempPathA|u32,ocstr=arg0|u32|"
+                                    ^^^^
+                arg 1 (the buffer) gets its size from arg 0 (the u32 length)
+```
+
+If neither qualifier is given the buffer is not pre-allocated; the callee must not write to it (useful only when the pointer itself is the meaningful value).
+
 ### Flags
 
 | Flag        | Meaning                                            |
