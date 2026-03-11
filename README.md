@@ -4,6 +4,18 @@ A Rust crate for calling functions in dynamic libraries at runtime, without need
 
 [![CI](https://github.com/pm100/dyncall/actions/workflows/ci.yml/badge.svg)](https://github.com/pm100/dyncall/actions/workflows/ci.yml)
 
+## Intended use
+
+`dyncall` is designed as a building block for **scripting languages and interpreters** that need to call arbitrary native functions at runtime — without knowing their signatures at compile time and without requiring the user to write any Rust FFI code.
+
+The typical pattern is:
+
+1. Your scripting language includes a mechanism for the user to declare an external function (library path, symbol, argument types, return type).
+2. Your interpreter calls `DynCaller::define_function_by_str` once to compile that declaration into a `FuncDef`.
+3. Each time the user's script invokes the function, you create an `Invocation`, push the script's runtime values as arguments, and call it.
+
+The Rust examples in this README demonstrate the raw `dyncall` API. In practice, **you** write the glue layer that translates your language's values into `push_arg` / `push_mut_arg` calls — `dyncall` handles everything below that.
+
 ## Features
 
 - Call any function in a shared library using a simple descriptor string
@@ -109,7 +121,9 @@ assert_eq!(ans, 42);
 
 ## Real-world example: BASIC interpreter
 
-[`basic`](https://github.com/pm100/basic) is a BASIC interpreter written in Rust that uses `dyncall` to let BASIC programs call arbitrary C functions at runtime — no Rust recompilation needed.
+[`basic`](https://github.com/pm100/basic) is a fork of [rodneykendall/basic](https://github.com/rodneykendall/basic), a BASIC interpreter written in Rust. The fork adds `dyncall` support, letting BASIC programs call arbitrary C functions at runtime with no Rust recompilation needed.
+
+This is the primary use case `dyncall` is designed for: the interpreter author writes the glue layer once (translating BASIC values into `push_arg` / `push_mut_arg` calls), and from then on script authors can reach any native function simply by naming it in a descriptor string.
 
 ### BASIC syntax
 
