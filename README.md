@@ -107,6 +107,83 @@ inv.call();
 assert_eq!(ans, 42);
 ```
 
+## Real-world example: BASIC interpreter
+
+[`basic`](https://github.com/pm100/basic) is a BASIC interpreter written in Rust that uses `dyncall` to let BASIC programs call arbitrary C functions at runtime — no Rust recompilation needed.
+
+### BASIC syntax
+
+```basic
+DEF XFN function_name("dll|symbol|param_types|return_type|flags")
+LET result = FN function_name(arg1, arg2, ...)
+```
+
+### Sample BASIC programs
+
+Call `atoi` to parse a string to an integer:
+
+```basic
+10 DEF XFN atoi("msvcrt.dll|atoi|cstr|i32|")
+20 LET x = FN atoi("42")
+30 PRINT x
+```
+
+Compare two strings with `strcmp`:
+
+```basic
+10 DEF XFN strcmp("msvcrt.dll|strcmp|cstr,cstr|i32|")
+20 LET result = FN strcmp("apple", "banana")
+30 PRINT "strcmp result: "; result
+```
+
+Parse an integer out of a string with `sscanf` (output pointer argument):
+
+```basic
+10 DEF XFN sscanf("msvcrt.dll|sscanf|cstr,cstr,*i32|i32|vararg=2")
+20 LET x = 0
+30 LET n = FN sscanf("42", "%d", x)
+40 PRINT "Parsed: "; x
+```
+
+Get a Windows temp path via `GetTempPathA` (output string buffer):
+
+```basic
+10 DEF XFN GetTempPathA("kernel32.dll|GetTempPathA|u32,ocstr=arg0|u32|")
+20 LET buffer = ""
+30 LET pathlen = FN GetTempPathA(260, buffer)
+40 PRINT "Temp path: "; buffer
+```
+
+### Rust integration
+
+The interpreter registers external functions at `DEF XFN` time and calls them via `FuncDef::prep` / `push_arg` / `push_mut_arg`:
+
+```rust
+use dyncall::{ArgType, ArgVal, FuncDef};
+
+// At DEF XFN time: parse the descriptor and store the FuncDef
+let fdef = DynCaller::define_function_by_str(defstr).unwrap();
+interpreter.external_functions.insert(name, fdef);
+
+// At call time: marshal BASIC values into the invocation
+let mut invoke = fdef.prep();
+for (i, arg_value) in arg_values.into_iter().enumerate() {
+    if let ArgType::Pointer(_) = fdef.get_arg_type(i) {
+        invoke.push_mut_arg(&mut out_num_buffer);   // output numeric
+    } else if let ArgType::OCString(_) = fdef.get_arg_type(i) {
+        invoke.push_mut_arg(&mut out_string_buffer); // output string
+    } else {
+        match arg_value {
+            Value::Number(n) => invoke.push_arg(&(n as i64)),
+            Value::String(s) => invoke.push_arg(&s),
+        }
+    }
+}
+let ret = invoke.call();
+```
+
+After the call, updated output buffers are written back to BASIC variables automatically.
+
 ## Running tests
 
 ```sh
