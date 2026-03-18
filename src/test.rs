@@ -436,7 +436,14 @@ mod test {
 
     #[test]
     fn test_mktime_and_strftime_with_struct_tm() {
+        // Windows MSVCRT struct tm has only the 9 standard fields (36 bytes).
+        // Linux/macOS libc appends tm_gmtoff (long = i64) and tm_zone (char* = i64),
+        // making the struct 56 bytes. Passing a too-small buffer causes mktime to
+        // overflow it when writing back normalised values.
+        #[cfg(target_os = "windows")]
         let tm_desc = "{i32,i32,i32,i32,i32,i32,i32,i32,i32}";
+        #[cfg(not(target_os = "windows"))]
+        let tm_desc = "{i32,i32,i32,i32,i32,i32,i32,i32,i32,i64,i64}";
         let mktime_def =
             DynCaller::define_function_by_str(&format!("{LIBC}|mktime|*{tm_desc}|i64|")).unwrap();
         let strftime_def = DynCaller::define_function_by_str(&format!(
