@@ -207,6 +207,7 @@ impl ToArg for CStr {
         let p = unsafe { mem::transmute::<*const i8, *mut c_void>(ptr) };
 
         func.arg_vals.push(ArgVal::Pointer(p));
+        func.arg_vals.push(ArgVal::Pointer(p));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         log::trace!("CStr to_arg ArgVal ptr: {:p}", pp);
         let ppp = if let ArgVal::Pointer(ref p) = pp {
