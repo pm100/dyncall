@@ -170,7 +170,7 @@ impl DynCaller {
 
         self.libs.insert(lib_name.to_string(), lib);
         // // return Ok(lib);
-        return Ok(self.libs.get(lib_name).unwrap().clone());
+        Ok(self.libs.get(lib_name).unwrap().clone())
     }
 
     fn get_entry_point(
@@ -182,24 +182,6 @@ impl DynCaller {
         let ep = unsafe { lib.symbol(entry_point_name)? };
         Ok(ep)
     }
-    // fn internal_type_to_type(arg_type: *mut ffi_type) -> ArgType {
-    //     unsafe {
-    //         match (*arg_type).type_ as u32 {
-    //             FFI_TYPE_POINTER => ArgType::Pointer,
-    //             FFI_TYPE_UINT64 => ArgType::U64,
-    //             FFI_TYPE_SINT64 => ArgType::I64,
-    //             FFI_TYPE_UINT32 => ArgType::U32,
-    //             FFI_TYPE_SINT32 => ArgType::I32,
-    //             FFI_TYPE_SINT16 => ArgType::I16,
-    //             FFI_TYPE_UINT16 => ArgType::U16,
-    //             FFI_TYPE_UINT8 => ArgType::Char,
-    //             FFI_TYPE_SINT8 => ArgType::Char,
-    //             FFI_TYPE_FLOAT => ArgType::F32,
-    //             FFI_TYPE_DOUBLE => ArgType::F64,
-    //             _ => panic!("Unsupported  type"),
-    //         }
-    //     }
-    // }
     /// Parse a function descriptor string, load the library, and return a [`FuncDef`].
     ///
     /// # Descriptor format
@@ -227,9 +209,6 @@ impl DynCaller {
     /// ).unwrap();
     /// ```
     pub fn define_function_by_str(funcdef: &str) -> Result<FuncDef> {
-        //pub fn define_function_by_str(&mut self, funcdef: &str) -> Result<FuncDef<'_>> {
-        // TODO add conditional dll defs
-        //let  dyncaller = &mut DYNCALLER;
         let funcdef = funcdef.split("|").collect::<Vec<&str>>();
         if funcdef.len() != 5 {
             bail!("Invalid function definition format. Expected 'lib_name|entry_point_name|arg1,arg2,arg3|return_type|flags'");
@@ -259,16 +238,13 @@ impl DynCaller {
         let mut func = FuncDef {
             cif: ffi_cif::default(),
             entry_point,
-            ffi_arg_types: ffi_arg_types, //.clone(),
+            ffi_arg_types: ffi_arg_types,
             ffi_return_type: unsafe { *ffi_ret },
             _ffi_owned_types: ffi_store.into_arc(),
             arg_types: my_arg_types,
             return_type: my_ret,
-            //  arg_vals: Vec::with_capacity(arg_count * 4), // worst case guess
-            //  arg_ptrs: Vec::with_capacity(arg_count),
         };
         let flags = Self::parse_flags(flag_str)?;
-        //  func.arg_vals.resize(arg_count, ArgVal::None);
         unsafe {
             if flags.has_fixed_args {
                 prep_cif_var(
@@ -307,60 +283,9 @@ impl DynCaller {
         }
         Ok(flags)
     }
-    //     pub fn call<T>(&mut self, func_def: &FuncDef, args: &mut Vec<*mut c_void>) -> Result<T>
-    //     where
-    //         T: Default,
-    //     {
-    //         //let le = unsafe { GetLastError() };
-    //         // let mut cif = self.get_cif(lib_name, entry_point_name)?;
-    //         // let entry_point = self.get_entry_point(lib_name, entry_point_name)?;
-    //         //let func_def = self.funcs.get(&id).ok_or(anyhow!("not found"))?;
-    //         let mut cif = func_def.cif;
-    //         let mut result = mem::MaybeUninit::<T>::uninit();
-    //         // let mut args = vec![&mut 99u32 as *mut _ as *mut c_void];
-    //         let ep = unsafe { std::mem::transmute(func_def.entry_point) };
-    //         // unsafe {
-    //         //     SetLastError(le);
-    //         // }
-    //         unsafe {
-    //             ffi_call(
-    //                 &mut cif,
-    //                 Some(ep),
-    //                 result.as_mut_ptr() as *mut c_void,
-    //                 args.as_mut_ptr(),
-    //             );
-    //         }
-
-    //         Ok(unsafe { result.assume_init() })
-    //     }
-    // }
-
-    // pub struct Args {
-    //     argsdef: Vec<*mut c_void>,
-    // }
-
-    // impl Args {
-    //     pub fn new() -> Self {
-    //         Args { argsdef: vec![] }
-    //     }
-    //     pub fn push<T>(&mut self, value: &T) {
-    //         unsafe {
-    //             self.argsdef
-    //                 .push(mem::transmute::<*const T, *mut c_void>(value));
-    //         }
-    //     }
-    // }
-    // fn arg_gen(args: &str) -> Vec<*mut ffi_type> {
-    //     let mut argsdef: Vec<*mut ffi_type> = vec![];
-    //     if args.len() > 0 {
-    //         for a in args.split(',') {
-    //             argsdef.push(type_gen(a));
-    //         }
-    //     }
-    //     argsdef
 }
+
 fn parse_def(def: &str) -> (&str, Option<&str>) {
-    // parse type definition like "xxxx[=yy]"
 
     let parts = def.split('=').collect::<Vec<&str>>();
     if parts.len() == 2 {

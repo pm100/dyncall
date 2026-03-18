@@ -21,36 +21,16 @@ use std::path::{Path, PathBuf};
 use std::{env, ffi};
 #[derive(Clone)]
 pub struct DynamicLibrary {
-    handle: usize, //*mut u8,
+    handle: usize,
 }
 
-// impl Drop for DynamicLibrary {
-//     fn drop(&mut self) {
-//         match dl::check_for_errors_in(|| unsafe { dl::close(self.handle) }) {
-//             Ok(()) => {}
-//             Err(str) => panic!("{}", str),
-//         }
-//     }
-// }
-
 #[allow(dead_code)]
 impl DynamicLibrary {
-    // FIXME (#12938): Until DST lands, we cannot decompose &str into
-    // & and str, so we cannot usefully take ToCStr arguments by
-    // reference (without forcing an additional & around &str). So we
-    // are instead temporarily adding an instance for &Path, so that
-    // we can take ToCStr as owned. When DST lands, the &Path instance
-    // should be removed, and arguments bound by ToCStr should be
-    // passed by reference. (Here: in the `open` method.)
-
     /// Lazily open a dynamic library. When passed None it gives a
     /// handle to the calling process
     pub fn open(filename: Option<&Path>) -> Result<DynamicLibrary> {
         let maybe_library = dl::open(filename.map(|path| path.as_os_str()));
 
-        // The dynamic library must not be constructed if there is
-        // an error opening the library so the destructor does not
-        // run.
         match maybe_library {
             Err(err) => Err(err),
             Ok(handle) => Ok(DynamicLibrary {
@@ -113,8 +93,6 @@ impl DynamicLibrary {
 
     /// Access the value at the symbol of the dynamic library
     pub unsafe fn symbol(&self, symbol: &str) -> Result<*mut ffi::c_void> {
-        // This function should have a lifetime constraint of 'a on
-        // T but that feature is still unimplemented
 
         let raw_string = CString::new(symbol).unwrap();
         let maybe_symbol_value =
@@ -128,60 +106,6 @@ impl DynamicLibrary {
         }
     }
 }
-
-// #[cfg(all(test, not(target_os = "ios")))]
-// mod test {
-//     use super::*;
-//     use std::mem;
-//     use std::path::Path;
-
-//     #[test]
-//     #[cfg_attr(any(windows, target_os = "android"), ignore)] // FIXME #8818, #10379
-//     fn test_loading_cosine() {
-//         // The math library does not need to be loaded since it is already
-//         // statically linked in
-//         let libm = match DynamicLibrary::open(None) {
-//             Err(error) => panic!("Could not load self as module: {}", error),
-//             Ok(libm) => libm,
-//         };
-
-//         let cosine: extern "C" fn(libc::c_double) -> libc::c_double = unsafe {
-//             match libm.symbol("cos") {
-//                 Err(error) => panic!("Could not load function cos: {}", error),
-//                 Ok(cosine) => mem::transmute::<*mut u8, _>(cosine),
-//             }
-//         };
-
-//         let argument = 0.0;
-//         let expected_result = 1.0;
-//         let result = cosine(argument);
-//         if result != expected_result {
-//             panic!(
-//                 "cos({}) != {} but equaled {} instead",
-//                 argument, expected_result, result
-//             )
-//         }
-//     }
-
-//     #[test]
-//     #[cfg(any(
-//         target_os = "linux",
-//         target_os = "macos",
-//         target_os = "freebsd",
-//         target_os = "dragonfly",
-//         target_os = "bitrig",
-//         target_os = "openbsd"
-//     ))]
-//     fn test_errors_do_not_crash() {
-//         // Open /dev/null as a library to get an error, and make sure
-//         // that only causes an error, and not a crash.
-//         let path = Path::new("/dev/null");
-//         match DynamicLibrary::open(Some(&path)) {
-//             Err(_) => {}
-//             Ok(_) => panic!("Successfully opened the empty library."),
-//         }
-//     }
-// }
 
 #[cfg(any(
     target_os = "linux",
@@ -257,37 +181,20 @@ mod dl {
 mod dl {
     use std::ffi::OsStr;
     use std::iter::Iterator;
-    //use std::libc::consts::os::extra::ERROR_CALL_NOT_IMPLEMENTED;
     use anyhow::{anyhow, Result};
     use std::ops::FnOnce;
     use std::option::Option::{self, None, Some};
     use std::os::windows::prelude::*;
     use std::ptr;
-    // use std::sys::c::compat::kernel32::SetThreadErrorMode;
-    //use std::sys::os;
     use std::vec::Vec;
 
     pub fn open(filename: Option<&OsStr>) -> Result<*mut u8> {
         // disable "dll load failed" error dialog.
         let use_thread_mode = true;
         let prev_error_mode = unsafe {
-            // SEM_FAILCRITICALERRORS 0x01
             let new_error_mode = 1;
             let mut prev_error_mode = 0;
-            // Windows >= 7 supports thread error mode.
             let _result = SetThreadErrorMode(new_error_mode, &mut prev_error_mode);
-            // if result == 0 {
-            //     let err = os::errno();
-            //     if err as libc::c_int == ERROR_CALL_NOT_IMPLEMENTED {
-            //         use_thread_mode = false;
-            //         // SetThreadErrorMode not found. use fallback solution:
-            //         // SetErrorMode() Note that SetErrorMode is process-wide so
-            //         // this can cause race condition!  However, since even
-            //         // Windows APIs do not care of such problem (#20650), we
-            //         // just assume SetErrorMode race is not a great deal.
-            //         prev_error_mode = SetErrorMode(new_error_mode);
-            //     }
-            // }
             prev_error_mode
         };
 
@@ -300,11 +207,7 @@ mod dl {
                 let filename_str: Vec<_> =
                     filename.encode_wide().chain(Some(0).into_iter()).collect();
                 let result = unsafe { LoadLibraryW(filename_str.as_ptr() as *const libc::c_void) };
-                // beware: Vec/String may change errno during drop!
-                // so we get error here.
                 if result == ptr::null_mut() {
-                    // let errno = os::errno();
-                    // Err(os::error_string(errno))
                     let err = unsafe { GetLastError() };
                     Err(anyhow!("Error code {:08x}", err))
                 } else {

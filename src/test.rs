@@ -70,7 +70,16 @@ mod test {
         println!("atoi ret={:?}", ret);
         assert_eq!(ret, 12345);
     }
-
+    #[test]
+    fn test_atoi_simple() {
+        let atoidef = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let mut atoi = atoidef.prep();
+        let str = "12345".to_string();
+        atoi.push_arg(&str);
+        let ret = atoi.call();
+        println!("atoi ret={:?}", ret.as_i32().unwrap());
+        assert_eq!(*ret.as_i32().unwrap(), 12345);
+    }
     #[test]
     fn test_fread() {
         let fopen_def =
@@ -126,9 +135,10 @@ mod test {
 
     #[test]
     fn test_printf() {
-        let printf_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1"))
-                .unwrap();
+        let printf_def = DynCaller::define_function_by_str(&format!(
+            "{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1"
+        ))
+        .unwrap();
         let format = "Hello, %s! You are %d years old.\n".to_string();
         let name = "Alice".to_string();
         let age = 30i32;
@@ -293,9 +303,10 @@ mod test {
     #[test]
     fn test_scanf_num_i8() {
         let instr = "127\n".to_string();
-        let sscanf_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|sscanf|cstr,cstr,*i8|i32|fixargs=2"))
-                .unwrap();
+        let sscanf_def = DynCaller::define_function_by_str(&format!(
+            "{LIBC}|sscanf|cstr,cstr,*i8|i32|fixargs=2"
+        ))
+        .unwrap();
         let format = "%hhd".to_string();
         let mut ans = 0i8;
         let mut sscanf = sscanf_def.prep();
@@ -311,9 +322,10 @@ mod test {
     #[test]
     fn test_scanf_num_u8() {
         let instr = "255\n".to_string();
-        let sscanf_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|sscanf|cstr,cstr,*u8|i32|fixargs=2"))
-                .unwrap();
+        let sscanf_def = DynCaller::define_function_by_str(&format!(
+            "{LIBC}|sscanf|cstr,cstr,*u8|i32|fixargs=2"
+        ))
+        .unwrap();
         let format = "%hhu".to_string();
         let mut ans = 0u8;
         let mut sscanf = sscanf_def.prep();

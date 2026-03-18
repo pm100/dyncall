@@ -87,7 +87,6 @@ pub enum ArgType {
 }
 impl ArgVal {
     pub(crate) fn payload_ptr(&self) -> *mut c_void {
-        // extracts a pointer to the data instide an ArgVal
         use ArgVal::*;
         match self {
             Pointer(ref val) => val as *const _ as *mut c_void,
@@ -101,17 +100,7 @@ impl ArgVal {
             F64(ref val) => val as *const _ as *mut c_void,
             I64(ref val) => val as *const _ as *mut c_void,
             Char(ref val) => val as *const _ as *mut c_void,
-            // CString(ref val) => {
-            //     val.as_ptr() as *const _ as *mut c_void
-
-            // }
-            // RustString(val) => {
-            //     let v = *val;
-            //     let s = unsafe { &*v };
-            //     s.as_ptr() as *mut c_void
-            // }
             _ => panic!("Unsupported ArgVal variant for payload_ptr"),
-            // ...
         }
     }
 }
@@ -133,16 +122,6 @@ pub trait ToArg {
 pub trait ToMutArg {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void;
 }
-// impl ToArg for CString {
-//     fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
-//         let ptr = self.as_ptr();
-//         let p = unsafe { std::mem::transmute::<*const i8, *mut c_void>(ptr) };
-//         func.arg_vals.push(ArgVal::Pointer(p));
-//         let penum = &func.arg_vals[func.arg_vals.len() - 1];
-
-//         penum.payload_ptr()
-//     }
-// }
 
 impl ToMutArg for String {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
@@ -151,26 +130,15 @@ impl ToMutArg for String {
 
         match arg_type {
             ArgType::OCString(_ldef) => {
-                // size maybe adjusted just before call
-
-                // store pointer to the string bytes
                 let buffer = self.as_mut_ptr() as *mut c_void;
                 func.arg_vals.push(ArgVal::Pointer(buffer));
-
-                // store pointer to the complete string for later retrieval
                 func.arg_vals.push(ArgVal::RustString(self));
                 let pbuff = &func.arg_vals[func.arg_vals.len() - 2];
                 pbuff.payload_ptr()
             }
             ArgType::OByteBuffer(_ldef) => {
-                // size maybe adjusted just before call
-
-                // store pointer to the buffer bytes
                 let buffer = self.as_mut_ptr() as *mut c_void;
                 func.arg_vals.push(ArgVal::Pointer(buffer));
-
-                // store pointer to the complete buffer for later retrieval
-
                 func.arg_vals.push(ArgVal::RustString(self));
                 let pbuff = &func.arg_vals[func.arg_vals.len() - 2];
                 pbuff.payload_ptr()
@@ -192,7 +160,6 @@ impl ToArg for String {
                 func.arg_vals.push(ArgVal::CString(cstr));
 
                 let pbuff = &func.arg_vals[func.arg_vals.len() - 2];
-                // pbuff.payload_ptr()
                 pbuff.payload_ptr()
             }
 
