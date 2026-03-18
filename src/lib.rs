@@ -33,13 +33,15 @@
 //! | `ocstr[=N\|=argK]` | output `char *` buffer; size fixed or from arg K|
 //! | `obuff[=N\|=argK]` | output raw byte buffer; size fixed or from arg K|
 //! | `*T`            | output pointer `T *` (e.g. `*i32`, `*f64`)        |
+//! | `{T1,T2,...}`   | flat struct passed by value                        |
+//! | `*{T1,T2,...}`  | pointer to a flat struct                           |
 //! | `void`          | no return value                                    |
 //!
 //! ### Flags
 //!
 //! | Flag          | Meaning                                              |
 //! |---------------|------------------------------------------------------|
-//! | `vararg=N`    | Variadic function with `N` fixed arguments           |
+//! | `fixargs=N`   | Variadic function with `N` fixed arguments           |
 //!
 //! ## Example
 //!
@@ -58,10 +60,15 @@
 //! assert_eq!(*result.as_i32().unwrap(), 42);
 //! ```
 
+//! For struct arguments, create a [`StructValue`] from the argument's declared
+//! type, push each field in order with [`StructValue::push_field`], then pass
+//! the completed value into the [`Invocation`].
+
 pub mod args;
 pub mod caller;
 mod dylib;
 pub mod invoke;
+pub mod structs;
 #[cfg(test)]
 mod test;
 pub use args::ArgType;
@@ -70,3 +77,7 @@ pub use args::LengthDef;
 pub use caller::DynCaller;
 pub use caller::FuncDef;
 pub use invoke::Invocation;
+pub use structs::FromStructField;
+pub use structs::StructType;
+pub use structs::StructValue;
+pub use structs::ToStructField;

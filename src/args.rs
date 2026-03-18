@@ -3,8 +3,9 @@ use std::{
     mem,
 };
 
-use enum_as_inner::EnumAsInner;
 use crate::invoke::Invocation;
+use crate::structs::{StructType, StructValue};
+use enum_as_inner::EnumAsInner;
 
 /// A runtime value held while preparing or executing a call.
 ///
@@ -15,6 +16,7 @@ use crate::invoke::Invocation;
 #[derive(EnumAsInner, Debug, Clone)]
 pub enum ArgVal {
     Pointer(*mut c_void),
+    StructValue(StructValue),
     U64(u64),
     F64(f64),
     I64(i64),
@@ -71,6 +73,8 @@ pub enum ArgType {
     OByteBuffer(LengthDef),
     /// Opaque pointer (`void *`, `FILE *`, `HANDLE`, …).
     OpaquePointer,
+    /// Flat struct passed by value.
+    Struct(StructType),
     /// Typed output pointer (`&mut T`). Use `*T` in the descriptor string.
     Pointer(Box<ArgType>),
     /// No value (only valid as a return type).
@@ -87,6 +91,7 @@ impl ArgVal {
         use ArgVal::*;
         match self {
             Pointer(ref val) => val as *const _ as *mut c_void,
+            StructValue(val) => val.as_ptr(),
             U64(ref val) => val as *const _ as *mut c_void,
             I32(ref val) => val as *const _ as *mut c_void,
             U32(ref val) => val as *const _ as *mut c_void,
@@ -195,21 +200,54 @@ impl ToArg for String {
         }
     }
 }
+impl ToMutArg for Vec<u8> {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        let arg_idx = func.arg_ptrs.len();
+        let arg_type = &func.func_def.arg_types[arg_idx];
+
+        match arg_type {
+            ArgType::OByteBuffer(_ldef) => {
+                let buffer = self.as_mut_ptr() as *mut c_void;
+                func.arg_vals.push(ArgVal::Pointer(buffer));
+                func.arg_vals.push(ArgVal::ByteBuffer(self));
+                let pbuff = &func.arg_vals[func.arg_vals.len() - 2];
+                pbuff.payload_ptr()
+            }
+            _ => unreachable!("Expected mutable byte buffer argument"),
+        }
+    }
+}
+impl ToArg for StructValue {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        let arg_idx = func.arg_ptrs.len();
+        let arg_type = &func.func_def.arg_types[arg_idx];
+
+        match arg_type {
+            ArgType::Struct(_) => {
+                func.arg_vals.push(ArgVal::StructValue(self.clone()));
+                func.arg_vals.push(ArgVal::StructValue(self.clone()));
+                let pp = &func.arg_vals[func.arg_vals.len() - 1];
+                pp.payload_ptr()
+            }
+            _ => unreachable!("Expected struct-by-value argument"),
+        }
+    }
+}
 impl ToArg for CStr {
     fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
         let ptr = self.as_ptr();
-        println!("CStr to_arg: {:x}", ptr as u64);
+        log::trace!("CStr to_arg: {:x}", ptr as u64);
         let p = unsafe { mem::transmute::<*const i8, *mut c_void>(ptr) };
 
         func.arg_vals.push(ArgVal::Pointer(p));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        println!("CStr to_arg ArgVal ptr: {:p}", pp);
+        log::trace!("CStr to_arg ArgVal ptr: {:p}", pp);
         let ppp = if let ArgVal::Pointer(ref p) = pp {
             p
         } else {
             panic!("Expected Pointer ArgVal")
         };
-        println!("CStr to_arg final ptr: {:p}", ppp);
+        log::trace!("CStr to_arg final ptr: {:p}", ppp);
         unsafe { mem::transmute::<&*mut c_void, *mut c_void>(ppp) }
     }
 }
@@ -218,6 +256,22 @@ impl ToArg for u64 {
     fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
         func.arg_vals.push(ArgVal::U64(*self));
         func.arg_vals.push(ArgVal::U64(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for u8 {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals.push(ArgVal::Char(*self));
+        func.arg_vals.push(ArgVal::Char(*self));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
+impl ToArg for i8 {
+    fn to_arg(&self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals.push(ArgVal::Char(*self as u8));
+        func.arg_vals.push(ArgVal::Char(*self as u8));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
     }
@@ -336,6 +390,16 @@ impl ToMutArg for u64 {
         pp.payload_ptr()
     }
 }
+impl ToMutArg for usize {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut usize as *mut c_void));
+        func.arg_vals
+            .push(ArgVal::Pointer(self as *mut usize as *mut c_void));
+        let pp = &func.arg_vals[func.arg_vals.len() - 1];
+        pp.payload_ptr()
+    }
+}
 
 impl ToMutArg for f64 {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
@@ -400,5 +464,23 @@ impl ToMutArg for u8 {
             .push(ArgVal::Pointer(self as *mut u8 as *mut c_void));
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
         pp.payload_ptr()
+    }
+}
+
+impl ToMutArg for StructValue {
+    fn to_mut_arg(&mut self, func: &mut Invocation) -> *mut c_void {
+        let arg_idx = func.arg_ptrs.len();
+        let arg_type = &func.func_def.arg_types[arg_idx];
+
+        match arg_type {
+            ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
+                let ptr = self.as_mut_ptr();
+                func.arg_vals.push(ArgVal::Pointer(ptr));
+                func.arg_vals.push(ArgVal::Pointer(ptr));
+                let pp = &func.arg_vals[func.arg_vals.len() - 1];
+                pp.payload_ptr()
+            }
+            _ => unreachable!("Expected pointer-to-struct argument"),
+        }
     }
 }

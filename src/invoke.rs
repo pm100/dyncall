@@ -2,11 +2,12 @@ use std::{ffi::c_void, ptr};
 
 use libc::strlen;
 use libffi::raw::{
-    ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER,
-    FFI_TYPE_SINT16, FFI_TYPE_SINT32, FFI_TYPE_SINT64, FFI_TYPE_SINT8, FFI_TYPE_UINT16,
-    FFI_TYPE_UINT32, FFI_TYPE_UINT64, FFI_TYPE_UINT8,
+    ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER, FFI_TYPE_SINT16, FFI_TYPE_SINT32,
+    FFI_TYPE_SINT64, FFI_TYPE_SINT8, FFI_TYPE_UINT16, FFI_TYPE_UINT32, FFI_TYPE_UINT64,
+    FFI_TYPE_UINT8, FFI_TYPE_VOID,
 };
 
+use crate::StructValue;
 use crate::{
     args::{ArgType, LengthDef, ToArg, ToMutArg},
     ArgVal, FuncDef,
@@ -66,6 +67,11 @@ impl<'a> Invocation<'a> {
     pub fn get_arg_count(&self) -> usize {
         self.func_def.arg_types.len()
     }
+
+    /// Create an empty [`StructValue`] for the declared argument at `index`.
+    pub fn create_struct(&self, index: usize) -> anyhow::Result<StructValue> {
+        self.func_def.create_struct(index)
+    }
     /// Execute the call, writing the return value into `return_ptr`.
     ///
     /// Use this when you want the return value placed into a pre-allocated
@@ -95,7 +101,7 @@ impl<'a> Invocation<'a> {
         // };
 
         // let addr = result.payload_ptr();
-        println!("call2 self={:?}", self.arg_ptrs);
+        log::trace!("call2 self={:?}", self.arg_ptrs);
         unsafe {
             ffi_call(
                 &mut cif,
@@ -129,11 +135,15 @@ impl<'a> Invocation<'a> {
             FFI_TYPE_SINT8 => ArgVal::Char(0),
             FFI_TYPE_FLOAT => ArgVal::F32(0.0),
             FFI_TYPE_DOUBLE => ArgVal::F64(0.0),
+            FFI_TYPE_VOID => ArgVal::None,
             _ => panic!("Unsupported return type"),
         };
 
-        let addr = result.payload_ptr();
-        println!("call2 self={:?}", self.arg_ptrs);
+        let addr = match result {
+            ArgVal::None => ptr::null_mut(),
+            _ => result.payload_ptr(),
+        };
+        log::trace!("call2 self={:?}", self.arg_ptrs);
         unsafe {
             ffi_call(
                 &mut cif,
@@ -168,7 +178,7 @@ impl<'a> Invocation<'a> {
         if let ArgVal::RustString(str) = &mut self.arg_vals[arg_idx * 2 + 1] {
             let s = unsafe { &mut **str };
             s.reserve(len + 1); // +1 for null terminator
-            println!("pre_process_ocstring reserved len={}", len);
+            log::trace!("pre_process_ocstring reserved len={}", len);
             self.arg_vals[arg_idx * 2] = ArgVal::Pointer(s.as_mut_ptr() as *mut c_void);
         };
     }
@@ -189,11 +199,20 @@ impl<'a> Invocation<'a> {
             LengthDef::Fixed(len) => *len,
             LengthDef::None => return,
         };
-        if let ArgVal::RustString(str) = &mut self.arg_vals[arg_idx * 2 + 1] {
-            let s = unsafe { &mut **str };
-            s.reserve(len);
-            println!("pre_process_obytebuffer reserved len={}", len);
-            self.arg_vals[arg_idx * 2] = ArgVal::Pointer(s.as_mut_ptr() as *mut c_void);
+        match &mut self.arg_vals[arg_idx * 2 + 1] {
+            ArgVal::RustString(str) => {
+                let s = unsafe { &mut **str };
+                s.reserve(len);
+                log::trace!("pre_process_obytebuffer reserved len={}", len);
+                self.arg_vals[arg_idx * 2] = ArgVal::Pointer(s.as_mut_ptr() as *mut c_void);
+            }
+            ArgVal::ByteBuffer(buffer) => {
+                let buf = unsafe { &mut **buffer };
+                buf.resize(len, 0);
+                log::trace!("pre_process_obytebuffer resized len={}", len);
+                self.arg_vals[arg_idx * 2] = ArgVal::Pointer(buf.as_mut_ptr() as *mut c_void);
+            }
+            _ => {}
         };
     }
     fn pre_process_args(&mut self) {
@@ -223,7 +242,7 @@ impl<'a> Invocation<'a> {
                             unsafe {
                                 let len = strlen(p as *const i8);
                                 let str = &mut **str;
-                                println!("fgets post_process_args len={}", len);
+                                log::trace!("fgets post_process_args len={}", len);
                                 str.as_mut_vec().set_len(len);
                                 // let rep_str = String::from_raw_parts(*p as *mut u8, len, cap);
                             }
@@ -232,17 +251,7 @@ impl<'a> Invocation<'a> {
                 }
                 ArgType::CString => {}
                 ArgType::OByteBuffer(_ldef) => {
-                    if let ArgVal::Pointer(_p) = self.arg_vals[i * 2] {
-                        // let arg_str = self.arg_vals.get_mut(i * 2 + 1).unwrap();
-                        // let foo = arg_str.as_rust_string_mut().unwrap();
-                        // if let ArgVal::RustString(str) = arg_str {
-                        //     unsafe {
-                        //         let cap = str.capacity();
-                        //         let str = &mut **str;
-                        //         str.as_mut_vec().set_len(cap);
-                        //     }
-                        // }
-                    }
+                    if let Some(ArgVal::ByteBuffer(_)) = self.arg_vals.get(i * 2 + 1) {}
                 }
                 // Add more mutable types as needed
                 _ => {}

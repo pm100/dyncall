@@ -1,19 +1,22 @@
 use std::ffi;
 use std::path::Path;
+use std::ptr;
 
-use std::sync::{LazyLock, Mutex};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail};
 
-use libffi::low::*;
+use libffi::low::{self, *};
 
 use libffi::raw::ffi_abi_FFI_DEFAULT_ABI;
 
 use crate::args::{ArgType, LengthDef};
 use crate::dylib::DynamicLibrary;
 use crate::invoke::Invocation;
+use crate::structs::{StructType, StructValue};
 static DYNCALLER: LazyLock<Mutex<DynCaller>> = LazyLock::new(|| Mutex::new(DynCaller::new()));
 
 /// A singleton that manages loaded dynamic libraries.
@@ -35,6 +38,7 @@ pub struct FuncDef {
     pub(crate) entry_point: unsafe extern "C" fn(),
     pub(crate) ffi_arg_types: Vec<*mut ffi_type>,
     pub(crate) ffi_return_type: ffi_type,
+    _ffi_owned_types: Arc<Vec<OwnedStructFfiType>>,
     pub(crate) arg_types: Vec<ArgType>,
     pub(crate) return_type: ArgType,
 }
@@ -61,10 +65,93 @@ impl FuncDef {
     pub fn get_return_type(&self) -> &ArgType {
         &self.return_type
     }
+
+    /// Create an empty [`StructValue`] for the declared argument at `index`.
+    ///
+    /// This is intended for arguments declared as `{...}` or `*{...}`.
+    pub fn create_struct(&self, index: usize) -> Result<StructValue> {
+        StructValue::new(self.get_arg_type(index))
+    }
+}
+
+struct OwnedStructFfiType {
+    ffi_type: Box<ffi_type>,
+    _elements: Box<[*mut ffi_type]>,
+}
+
+impl OwnedStructFfiType {
+    fn new(mut elements: Vec<*mut ffi_type>) -> Self {
+        elements.push(ptr::null_mut());
+        let mut elements = elements.into_boxed_slice();
+        let ffi_type = Box::new(ffi_type {
+            type_: low::type_tag::STRUCT as u16,
+            elements: elements.as_mut_ptr(),
+            ..Default::default()
+        });
+        Self {
+            ffi_type,
+            _elements: elements,
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut ffi_type {
+        self.ffi_type.as_mut()
+    }
+}
+
+struct FfiTypeStore {
+    owned_structs: Vec<OwnedStructFfiType>,
+}
+
+impl FfiTypeStore {
+    fn new() -> Self {
+        Self {
+            owned_structs: Vec::new(),
+        }
+    }
+
+    fn ffi_type_for(&mut self, arg_type: &ArgType) -> Result<*mut ffi_type> {
+        Ok(match arg_type {
+            ArgType::Char => &raw mut types::uint8,
+            ArgType::U16 => &raw mut types::uint16,
+            ArgType::I16 => &raw mut types::sint16,
+            ArgType::U32 => &raw mut types::uint32,
+            ArgType::I32 => &raw mut types::sint32,
+            ArgType::U64 => &raw mut types::uint64,
+            ArgType::I64 => &raw mut types::sint64,
+            ArgType::F32 => &raw mut types::float,
+            ArgType::F64 => &raw mut types::double,
+            ArgType::OpaquePointer
+            | ArgType::CString
+            | ArgType::OCString(_)
+            | ArgType::ByteBuffer
+            | ArgType::OByteBuffer(_)
+            | ArgType::Pointer(_) => &raw mut types::pointer,
+            ArgType::Struct(struct_type) => {
+                let elements = struct_type
+                    .fields
+                    .iter()
+                    .map(|field| self.ffi_type_for(&field.arg_type))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut owned = OwnedStructFfiType::new(elements);
+                let ptr = owned.as_mut_ptr();
+                self.owned_structs.push(owned);
+                ptr
+            }
+            ArgType::Void => &raw mut types::void,
+            ArgType::Stdin | ArgType::Stdout | ArgType::Stderr => {
+                bail!("Special stream descriptors are not supported in function signatures")
+            }
+        })
+    }
+
+    fn into_arc(self) -> Arc<Vec<OwnedStructFfiType>> {
+        Arc::new(self.owned_structs)
+    }
 }
 
 struct Flags {
-    vararg: bool,
+    has_fixed_args: bool,
     fixed_args: u8,
 }
 impl DynCaller {
@@ -136,7 +223,7 @@ impl DynCaller {
     /// use dyncall::DynCaller;
     /// // printf(const char *fmt, ...) → int
     /// let def = DynCaller::define_function_by_str(
-    ///     "msvcrt.dll|printf|cstr,i32|i32|vararg=1"
+    ///     "msvcrt.dll|printf|cstr,i32|i32|fixargs=1"
     /// ).unwrap();
     /// ```
     pub fn define_function_by_str(funcdef: &str) -> Result<FuncDef> {
@@ -150,18 +237,18 @@ impl DynCaller {
         let lib_name = funcdef[0];
         let entry_point_name = funcdef[1];
         let args_str = funcdef[2];
-        //let args = arg_gen(args_str);
-        let mut my_arg_types = Vec::new();
-        let mut ffi_arg_types = Vec::new();
-        if args_str.len() > 0 {
-            for a in args_str.split(',') {
-                let (ffi_type, my_type) = type_gen(a);
-                ffi_arg_types.push(ffi_type);
-                my_arg_types.push(my_type);
-            }
-        }
+        let my_arg_types = parse_arg_types(args_str)?;
+        let mut ffi_store = FfiTypeStore::new();
+        let ffi_arg_types = my_arg_types
+            .iter()
+            .map(|arg_type| ffi_store.ffi_type_for(arg_type))
+            .collect::<Result<Vec<_>>>()?;
         let return_type_str = funcdef[3];
-        let (ffi_ret, my_ret) = type_gen(return_type_str);
+        let my_ret = parse_arg_type(return_type_str)?;
+        if matches!(my_ret, ArgType::Struct(_)) {
+            bail!("Struct return values are not supported yet");
+        }
+        let ffi_ret = ffi_store.ffi_type_for(&my_ret)?;
         let arg_count = my_arg_types.len();
         let ep = DYNCALLER
             .lock()
@@ -174,6 +261,7 @@ impl DynCaller {
             entry_point,
             ffi_arg_types: ffi_arg_types, //.clone(),
             ffi_return_type: unsafe { *ffi_ret },
+            _ffi_owned_types: ffi_store.into_arc(),
             arg_types: my_arg_types,
             return_type: my_ret,
             //  arg_vals: Vec::with_capacity(arg_count * 4), // worst case guess
@@ -182,7 +270,7 @@ impl DynCaller {
         let flags = Self::parse_flags(flag_str)?;
         //  func.arg_vals.resize(arg_count, ArgVal::None);
         unsafe {
-            if flags.vararg {
+            if flags.has_fixed_args {
                 prep_cif_var(
                     &mut func.cif,
                     ffi_abi_FFI_DEFAULT_ABI,
@@ -208,12 +296,12 @@ impl DynCaller {
     }
     fn parse_flags(flag_str: &str) -> Result<Flags> {
         let mut flags = Flags {
-            vararg: false,
+            has_fixed_args: false,
             fixed_args: 0,
         };
         for flag in flag_str.split(',') {
-            if let Some(fixed_count) = flag.strip_prefix("vararg=") {
-                flags.vararg = true;
+            if let Some(fixed_count) = flag.strip_prefix("fixargs=") {
+                flags.has_fixed_args = true;
                 flags.fixed_args = fixed_count.parse::<u8>()?;
             }
         }
@@ -280,58 +368,100 @@ fn parse_def(def: &str) -> (&str, Option<&str>) {
     }
     (parts[0], None)
 }
-fn type_gen(at: &str) -> (*mut ffi_type, ArgType) {
-    match at.strip_prefix('*') {
-        Some(rest) => {
-            let (_base_type, my_type) = type_gen(rest);
-            return (&raw mut types::pointer, ArgType::Pointer(Box::new(my_type)));
-        }
-        None => { /* continue */ }
+fn parse_arg_types(args_str: &str) -> Result<Vec<ArgType>> {
+    if args_str.trim().is_empty() {
+        return Ok(Vec::new());
     }
+
+    split_top_level(args_str, ',')?
+        .into_iter()
+        .map(parse_arg_type)
+        .collect()
+}
+
+fn parse_arg_type(at: &str) -> Result<ArgType> {
+    let at = at.trim();
+    if let Some(rest) = at.strip_prefix('*') {
+        return Ok(ArgType::Pointer(Box::new(parse_arg_type(rest)?)));
+    }
+    if at.starts_with('{') {
+        return Ok(ArgType::Struct(parse_struct_type(at)?));
+    }
+
     let (parsed_arg, qualifier) = parse_def(at);
-    match parsed_arg.trim() {
-        "u8" => (&raw mut types::uint8, ArgType::Char),
-        "i8" => (&raw mut types::sint8, ArgType::Char),
-        "u16" => (&raw mut types::uint16, ArgType::U16),
-        "i16" => (&raw mut types::sint16, ArgType::I16),
-        "u32" => (&raw mut types::uint32, ArgType::U32),
-        "i32" => (&raw mut types::sint32, ArgType::I32),
-        "u64" => (&raw mut types::uint64, ArgType::U64),
-        "i64" => (&raw mut types::sint64, ArgType::I64),
-        "f32" => (&raw mut types::float, ArgType::F32),
-        "f64" => (&raw mut types::double, ArgType::F64),
-        "ptr" => (&raw mut types::pointer, ArgType::OpaquePointer),
-        "cstr" => (&raw mut types::pointer, ArgType::CString),
-        "ocstr" => {
-            let ldef = if let Some(qual) = qualifier {
-                if qual.starts_with("arg") {
-                    let arg_idx: u8 = qual[3..].parse().unwrap();
-                    LengthDef::Arg(arg_idx)
-                } else {
-                    let fixed_len: usize = qual.parse().unwrap();
-                    LengthDef::Fixed(fixed_len)
-                }
-            } else {
-                LengthDef::None
-            };
-            (&raw mut types::pointer, ArgType::OCString(ldef))
-        }
-        "obuff" => {
-            let ldef = if let Some(qual) = qualifier {
-                if qual.starts_with("arg") {
-                    let arg_idx: u8 = qual[3..].parse().unwrap();
-                    LengthDef::Arg(arg_idx)
-                } else {
-                    let fixed_len: usize = qual.parse().unwrap();
-                    LengthDef::Fixed(fixed_len)
-                }
-            } else {
-                LengthDef::None
-            };
-            (&raw mut types::pointer, ArgType::OByteBuffer(ldef))
-        }
-        "buff" => (&raw mut types::pointer, ArgType::ByteBuffer),
-        "void" => (&raw mut types::void, ArgType::Void),
-        _ => panic!("unknown type {}", at),
+    Ok(match parsed_arg.trim() {
+        "u8" | "i8" => ArgType::Char,
+        "u16" => ArgType::U16,
+        "i16" => ArgType::I16,
+        "u32" => ArgType::U32,
+        "i32" => ArgType::I32,
+        "u64" => ArgType::U64,
+        "i64" => ArgType::I64,
+        "f32" => ArgType::F32,
+        "f64" => ArgType::F64,
+        "ptr" => ArgType::OpaquePointer,
+        "cstr" => ArgType::CString,
+        "ocstr" => ArgType::OCString(parse_length_def(qualifier)?),
+        "obuff" => ArgType::OByteBuffer(parse_length_def(qualifier)?),
+        "buff" => ArgType::ByteBuffer,
+        "void" => ArgType::Void,
+        _ => bail!("unknown type {}", at),
+    })
+}
+
+fn parse_struct_type(definition: &str) -> Result<StructType> {
+    if !definition.ends_with('}') {
+        bail!("Struct type {} is missing a closing brace", definition);
     }
+    let inner = &definition[1..definition.len() - 1];
+    let field_types = split_top_level(inner, ',')?
+        .into_iter()
+        .map(parse_arg_type)
+        .collect::<Result<Vec<_>>>()?;
+    StructType::new(field_types)
+}
+
+fn parse_length_def(qualifier: Option<&str>) -> Result<LengthDef> {
+    if let Some(qual) = qualifier {
+        if let Some(rest) = qual.strip_prefix("arg") {
+            return Ok(LengthDef::Arg(rest.parse()?));
+        }
+        return Ok(LengthDef::Fixed(qual.parse()?));
+    }
+    Ok(LengthDef::None)
+}
+
+fn split_top_level(input: &str, separator: char) -> Result<Vec<&str>> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                if depth == 0 {
+                    bail!("Unmatched closing brace in {}", input);
+                }
+                depth -= 1;
+            }
+            _ if ch == separator && depth == 0 => {
+                parts.push(input[start..idx].trim());
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    if depth != 0 {
+        bail!("Unclosed struct type in {}", input);
+    }
+
+    parts.push(input[start..].trim());
+    Ok(parts)
 }

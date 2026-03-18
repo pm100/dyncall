@@ -21,6 +21,7 @@ The Rust examples in this README demonstrate the raw `dyncall` API. In practice,
 - Call any function in a shared library using a simple descriptor string
 - Supports all common numeric types, C strings, and raw byte buffers
 - Handles output (pointer) arguments — values written back by the callee
+- Supports flat primitive structs by value and pointers to those structs
 - Supports variadic functions (`printf`, `sscanf`, etc.)
 - Cross-platform: Windows, macOS, Linux
 
@@ -37,7 +38,7 @@ dyncall = { git = "https://github.com/pm100/dyncall" }
 
 1. Define a function with [`DynCaller::define_function_by_str`]
 2. Prepare an [`Invocation`] via [`FuncDef::prep`]
-3. Push arguments with `push_arg` (input) or `push_mut_arg` (output)
+3. Push arguments with `push_arg` (input) or `push_mut_arg` (output / pointer)
 4. Call with `call` or `call_and_return`
 
 ## Function descriptor format
@@ -62,7 +63,11 @@ All five `|`-separated fields are required (the last two may be empty).
 | `ocstr[=N\|=argK]`     | output `char *` buffer; size fixed or from arg K   |
 | `obuff[=N\|=argK]`     | output raw byte buffer; size fixed or from arg K   |
 | `*T`                   | output pointer `T *` (e.g. `*i32`, `*f64`)         |
+| `{T1,T2,...}`          | flat struct passed by value                        |
+| `*{T1,T2,...}`         | pointer to a flat struct                           |
 | `void`                 | no return value                                    |
+
+Struct support in the first version is limited to **flat structs whose fields are primitive scalar types** (`i8/u8`, `i16/u16`, `i32/u32`, `i64/u64`, `f32`, `f64`). Nested structs and pointer fields inside `{...}` are not supported yet.
 
 ### Output buffer sizing (`ocstr` and `obuff`)
 
@@ -83,7 +88,7 @@ If neither qualifier is given the buffer is not pre-allocated; the callee must n
 
 | Flag        | Meaning                                            |
 |-------------|----------------------------------------------------|
-| `vararg=N`  | Variadic function with `N` fixed arguments         |
+| `fixargs=N` | Variadic function with `N` fixed arguments         |
 
 ## Examples
 
@@ -107,9 +112,9 @@ assert_eq!(*result.as_i32().unwrap(), 42);
 
 ```rust
 // printf(const char *fmt, ...) → int
-// vararg=1 means 1 fixed argument (the format string)
+// fixargs=1 means 1 fixed argument (the format string)
 let def = DynCaller::define_function_by_str(
-    &format!("{LIBC}|printf|cstr,cstr,i32|i32|vararg=1")
+    &format!("{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1")
 ).unwrap();
 let mut inv = def.prep();
 inv.push_arg(&"Hello, %s! You are %d years old.\n".to_string());
@@ -123,7 +128,7 @@ inv.call();
 ```rust
 // sscanf writes the parsed value back through a pointer argument
 let def = DynCaller::define_function_by_str(
-    &format!("{LIBC}|sscanf|cstr,cstr,*i32|i32|vararg=2")
+    &format!("{LIBC}|sscanf|cstr,cstr,*i32|i32|fixargs=2")
 ).unwrap();
 let mut ans = 0i32;
 let mut inv = def.prep();
@@ -132,6 +137,59 @@ inv.push_arg(&"%d".to_string());
 inv.push_mut_arg(&mut ans);
 inv.call();
 assert_eq!(ans, 42);
+```
+
+### Pass a struct by value
+
+```rust
+let def = DynCaller::define_function_by_str(
+    "myffi.dll|sum_pair|{u32,u32}|u32|"
+).unwrap();
+
+let mut inv = def.prep();
+let mut pair = inv.create_struct(0).unwrap();
+pair.push_field(&10u32).unwrap();
+pair.push_field(&32u32).unwrap();
+
+inv.push_arg(&pair);
+let result = inv.call();
+assert_eq!(*result.as_u32().unwrap(), 42);
+```
+
+### Pass a pointer to a struct
+
+```rust
+let def = DynCaller::define_function_by_str(
+    "myffi.dll|bump_pair|*{u32,u32}|u32|"
+).unwrap();
+
+let mut pair = def.create_struct(0).unwrap();
+pair.push_field(&7u32).unwrap();
+pair.push_field(&8u32).unwrap();
+
+let mut inv = def.prep();
+inv.push_mut_arg(&mut pair);
+inv.call();
+
+assert_eq!(pair.read_field::<u32>(0).unwrap(), 8);
+assert_eq!(pair.read_field::<u32>(1).unwrap(), 10);
+```
+
+### Call `localeconv`
+
+```rust
+// localeconv(void) -> struct lconv *
+//
+// `dyncall` can call this today by treating the return value as an opaque
+// pointer. The pointed-to `struct lconv` cannot be described with `{...}`
+// yet because it contains pointer fields.
+let def = DynCaller::define_function_by_str(
+    &format!("{LIBC}|localeconv||ptr|")
+).unwrap();
+
+let mut inv = def.prep();
+let result = inv.call();
+assert!(!result.as_pointer().unwrap().is_null());
 ```
 
 ## Real-world example: BASIC interpreter
@@ -146,6 +204,8 @@ This is the primary use case `dyncall` is designed for: the interpreter author w
 DEF XFN function_name("dll|symbol|param_types|return_type|flags")
 LET result = FN function_name(arg1, arg2, ...)
 ```
+
+For struct arguments, the BASIC integration uses a numeric array as the backing storage. Pass the array name as the argument for `{...}` or `*{...}` descriptors, and map fields by flattened array order. If the descriptor is `*{...}`, any fields mutated by the native function are written back into the same BASIC array after the call.
 
 ### Sample BASIC programs
 
@@ -168,7 +228,7 @@ Compare two strings with `strcmp`:
 Parse an integer out of a string with `sscanf` (output pointer argument):
 
 ```basic
-10 DEF XFN sscanf("msvcrt.dll|sscanf|cstr,cstr,*i32|i32|vararg=2")
+10 DEF XFN sscanf("msvcrt.dll|sscanf|cstr,cstr,*i32|i32|fixargs=2")
 20 LET x = 0
 30 LET n = FN sscanf("42", "%d", x)
 40 PRINT "Parsed: "; x
@@ -181,6 +241,29 @@ Get a Windows temp path via `GetTempPathA` (output string buffer):
 20 LET buffer = ""
 30 LET pathlen = FN GetTempPathA(260, buffer)
 40 PRINT "Temp path: "; buffer
+```
+
+Pass a `struct tm *` via a BASIC array and let `strftime` write derived fields back into that same array:
+
+```basic
+10 DIM TM(8)
+20 LET TM(0) = 30
+30 LET TM(1) = 15
+40 LET TM(2) = 8
+50 LET TM(3) = 11
+60 LET TM(4) = 2
+70 LET TM(5) = 124
+80 LET TM(6) = 0
+90 LET TM(7) = 0
+100 LET TM(8) = -1
+110 DEF XFN mktime("msvcrt.dll|mktime|*{i32,i32,i32,i32,i32,i32,i32,i32,i32}|i64|")
+120 DEF XFN strftime("msvcrt.dll|strftime|ocstr=arg1,u64,cstr,*{i32,i32,i32,i32,i32,i32,i32,i32,i32}|u64|")
+130 LET out$ = ""
+140 LET ts = FN mktime(TM)
+150 LET n = FN strftime(out$, 64, "%Y-%m-%d %H:%M:%S", TM)
+160 PRINT ts
+170 PRINT out$
+180 PRINT TM(6)
 ```
 
 ### Rust integration

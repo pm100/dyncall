@@ -1,5 +1,9 @@
 mod test {
     use std::ffi::c_void;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::OnceLock;
 
     use crate::DynCaller;
 
@@ -9,11 +13,54 @@ mod test {
     const LIBC: &str = "libSystem.B.dylib";
     #[cfg(target_os = "linux")]
     const LIBC: &str = "libc.so.6";
+    static STRUCT_FIXTURE_PATH: OnceLock<String> = OnceLock::new();
+
+    fn struct_fixture_path() -> &'static str {
+        STRUCT_FIXTURE_PATH.get_or_init(|| {
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let source = manifest_dir.join("tools").join("struct_fixture.rs");
+            let output_dir = manifest_dir.join("target").join("struct-fixture");
+            fs::create_dir_all(&output_dir).unwrap();
+            let output = output_dir.join(struct_fixture_filename());
+            let status = Command::new("rustc")
+                .args([
+                    "--crate-type",
+                    "cdylib",
+                    "--edition",
+                    "2021",
+                    source.to_str().unwrap(),
+                    "-o",
+                    output.to_str().unwrap(),
+                ])
+                .status()
+                .unwrap();
+            assert!(status.success(), "failed to build struct fixture");
+            output
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+    }
+
+    fn struct_fixture_filename() -> &'static str {
+        #[cfg(target_os = "windows")]
+        {
+            "struct_fixture.dll"
+        }
+        #[cfg(target_os = "macos")]
+        {
+            "libstruct_fixture.dylib"
+        }
+        #[cfg(target_os = "linux")]
+        {
+            "libstruct_fixture.so"
+        }
+    }
 
     #[test]
     fn test_atoi() {
-        let atoidef =
-            DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let atoidef = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
         let mut atoi = atoidef.prep();
         let str = "12345".to_string();
         atoi.push_arg(&str);
@@ -28,10 +75,9 @@ mod test {
     fn test_fread() {
         let fopen_def =
             DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|u64|")).unwrap();
-        let fread_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|fread|i32,i32,obuff=arg1,ptr|i32|"
-        ))
-        .unwrap();
+        let fread_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|fread|i32,i32,obuff=arg1,ptr|i32|"))
+                .unwrap();
         let mut fopen = fopen_def.prep();
         let mut fread = fread_def.prep();
         let name = "test.txt2".to_string();
@@ -58,10 +104,9 @@ mod test {
     fn test_fgets() {
         let fopen_def =
             DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|u64|")).unwrap();
-        let fgets_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|fgets|ocstr=arg1,i32,ptr|i32|"
-        ))
-        .unwrap();
+        let fgets_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|fgets|ocstr=arg1,i32,ptr|i32|"))
+                .unwrap();
         let mut fopen = fopen_def.prep();
         let mut fgets = fgets_def.prep();
         let name = "test.txt2".to_string();
@@ -81,10 +126,9 @@ mod test {
 
     #[test]
     fn test_printf() {
-        let printf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|printf|cstr,cstr,i32|i32|vararg=1"
-        ))
-        .unwrap();
+        let printf_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1"))
+                .unwrap();
         let format = "Hello, %s! You are %d years old.\n".to_string();
         let name = "Alice".to_string();
         let age = 30i32;
@@ -100,7 +144,7 @@ mod test {
     fn test_scanf() {
         let instr = "hello world 42\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,ocstr=50|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,ocstr=50|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%s".to_string();
@@ -117,7 +161,7 @@ mod test {
     fn test_scanf_num_i32() {
         let instr = "42\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i32|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*i32|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%d".to_string();
@@ -136,7 +180,7 @@ mod test {
     fn test_scanf_num_u32() {
         let instr = "4294967295\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u32|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*u32|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%u".to_string();
@@ -155,7 +199,7 @@ mod test {
     fn test_scanf_num_u64() {
         let instr = "18446744073709551615\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u64|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*u64|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%llu".to_string();
@@ -174,7 +218,7 @@ mod test {
     fn test_scanf_num_i64() {
         let instr = "-9223372036854775808\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i64|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*i64|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%lld".to_string();
@@ -193,7 +237,7 @@ mod test {
     fn test_scanf_num_f32() {
         let instr = "3.14\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*f32|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*f32|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%f".to_string();
@@ -212,7 +256,7 @@ mod test {
     fn test_scanf_num_i16() {
         let instr = "32767\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i16|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*i16|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%hd".to_string();
@@ -231,7 +275,7 @@ mod test {
     fn test_scanf_num_u16() {
         let instr = "65535\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u16|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*u16|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%hu".to_string();
@@ -249,10 +293,9 @@ mod test {
     #[test]
     fn test_scanf_num_i8() {
         let instr = "127\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*i8|i32|vararg=2"
-        ))
-        .unwrap();
+        let sscanf_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|sscanf|cstr,cstr,*i8|i32|fixargs=2"))
+                .unwrap();
         let format = "%hhd".to_string();
         let mut ans = 0i8;
         let mut sscanf = sscanf_def.prep();
@@ -268,10 +311,9 @@ mod test {
     #[test]
     fn test_scanf_num_u8() {
         let instr = "255\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*u8|i32|vararg=2"
-        ))
-        .unwrap();
+        let sscanf_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|sscanf|cstr,cstr,*u8|i32|fixargs=2"))
+                .unwrap();
         let format = "%hhu".to_string();
         let mut ans = 0u8;
         let mut sscanf = sscanf_def.prep();
@@ -288,7 +330,7 @@ mod test {
     fn test_scanf_num_f64() {
         let instr = "3.14159\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,*f64|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,*f64|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%lf".to_string();
@@ -308,7 +350,7 @@ mod test {
         let instr =
             "hello 42 4294967295 18446744073709551615 -9223372036854775808 3.14159\n".to_string();
         let sscanf_def = DynCaller::define_function_by_str(&format!(
-            "{LIBC}|sscanf|cstr,cstr,ocstr=50,*i32,*u32,*u64,*i64,*f64|i32|vararg=2"
+            "{LIBC}|sscanf|cstr,cstr,ocstr=50,*i32,*u32,*u64,*i64,*f64|i32|fixargs=2"
         ))
         .unwrap();
         let format = "%s %d %u %llu %lld %lf".to_string();
@@ -345,5 +387,91 @@ mod test {
         assert_eq!(i64v, -9_223_372_036_854_775_808);
         assert!((f64v - 3.14159).abs() < 1e-9);
         assert_eq!(*ret.as_i32().unwrap(), 6);
+    }
+
+    #[test]
+    fn test_struct_by_value() {
+        let lib = struct_fixture_path();
+        let def =
+            DynCaller::define_function_by_str(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let mut inv = def.prep();
+        let mut pair = inv.create_struct(0).unwrap();
+        pair.push_field(&10u32).unwrap();
+        pair.push_field(&32u32).unwrap();
+        inv.push_arg(&pair);
+        let ret = inv.call();
+        assert_eq!(*ret.as_u32().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_struct_pointer_input() {
+        let lib = struct_fixture_path();
+        let def =
+            DynCaller::define_function_by_str(&format!("{lib}|sum_pair_ptr|*{{u32,u32}}|u32|"))
+                .unwrap();
+        let mut inv = def.prep();
+        let mut pair = def.create_struct(0).unwrap();
+        pair.push_field(&11u32).unwrap();
+        pair.push_field(&31u32).unwrap();
+        inv.push_mut_arg(&mut pair);
+        let ret = inv.call();
+        assert_eq!(*ret.as_u32().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_struct_pointer_mutation() {
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function_by_str(&format!("{lib}|bump_pair|*{{u32,u32}}|u32|"))
+            .unwrap();
+        let mut inv = def.prep();
+        let mut pair = def.create_struct(0).unwrap();
+        pair.push_field(&7u32).unwrap();
+        pair.push_field(&8u32).unwrap();
+        inv.push_mut_arg(&mut pair);
+        let ret = inv.call();
+        assert_eq!(*ret.as_u32().unwrap(), 18);
+        assert_eq!(pair.read_field::<u32>(0).unwrap(), 8);
+        assert_eq!(pair.read_field::<u32>(1).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_mktime_and_strftime_with_struct_tm() {
+        let tm_desc = "{i32,i32,i32,i32,i32,i32,i32,i32,i32}";
+        let mktime_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|mktime|*{tm_desc}|i64|")).unwrap();
+        let strftime_def = DynCaller::define_function_by_str(&format!(
+            "{LIBC}|strftime|ocstr=arg1,u64,cstr,*{tm_desc}|u64|"
+        ))
+        .unwrap();
+
+        let mut tm = mktime_def.create_struct(0).unwrap();
+        tm.push_field(&5i32).unwrap();
+        tm.push_field(&4i32).unwrap();
+        tm.push_field(&3i32).unwrap();
+        tm.push_field(&2i32).unwrap();
+        tm.push_field(&0i32).unwrap();
+        tm.push_field(&124i32).unwrap();
+        tm.push_field(&0i32).unwrap();
+        tm.push_field(&0i32).unwrap();
+        tm.push_field(&(-1i32)).unwrap();
+
+        let mut mktime = mktime_def.prep();
+        mktime.push_mut_arg(&mut tm);
+        let mktime_ret = mktime.call();
+        assert_ne!(*mktime_ret.as_i64().unwrap(), -1);
+
+        let format = "%Y-%m-%d %H:%M:%S".to_string();
+        let mut output = String::new();
+        let mut strftime = strftime_def.prep();
+        strftime.push_mut_arg(&mut output);
+        strftime.push_arg(&64u64);
+        strftime.push_arg(&format);
+        strftime.push_mut_arg(&mut tm);
+        let strftime_ret = strftime.call();
+
+        assert_eq!(*strftime_ret.as_u64().unwrap(), 19);
+        assert_eq!(output, "2024-01-02 03:04:05");
+        assert_eq!(tm.read_field::<i32>(6).unwrap(), 2);
+        assert_eq!(tm.read_field::<i32>(7).unwrap(), 1);
     }
 }
