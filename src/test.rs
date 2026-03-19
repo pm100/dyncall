@@ -572,4 +572,51 @@ mod test {
         let ret = inv.call();
         assert!(*ret.as_i32().unwrap() > 0);
     }
+
+    #[test]
+    fn test_fgets_via_file() {
+        // Write a known string to a temp file, then read it back with fgets.
+        use crate::ArgVal;
+        use std::ffi::c_void;
+
+        let path = std::env::temp_dir().join("dyncall_fgets_test.txt");
+        std::fs::write(&path, "hello from fgets\n").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+
+        // fopen(path, "r") -> FILE*
+        let fopen_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
+        let mut inv = fopen_def.prep();
+        inv.push_arg(&path_str).unwrap();
+        inv.push_arg(&"r".to_string()).unwrap();
+        let file_val = inv.call();
+        let fp: *mut c_void = *file_val.as_pointer().unwrap();
+        assert!(!fp.is_null(), "fopen failed");
+
+        // fgets(buf, 64, fp) -> ptr
+        let fgets_def = DynCaller::define_function_by_str(&format!(
+            "{LIBC}|fgets|ocstr=arg1,i32,ptr|ptr|"
+        ))
+        .unwrap();
+        let mut inv = fgets_def.prep();
+        let mut buf = String::new();
+        inv.push_mut_arg(&mut buf).unwrap();
+        inv.push_arg(&64i32).unwrap();
+        inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+        let ret = inv.call();
+        assert!(
+            !(*ret.as_pointer().unwrap()).is_null(),
+            "fgets returned NULL"
+        );
+        assert_eq!(buf, "hello from fgets\n");
+
+        // fclose(fp)
+        let fclose_def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
+        let mut inv = fclose_def.prep();
+        inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+        inv.call();
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

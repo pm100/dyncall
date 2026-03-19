@@ -145,9 +145,6 @@ impl FfiTypeStore {
                 ptr
             }
             ArgType::Void => &raw mut types::void,
-            ArgType::Stdin | ArgType::Stdout | ArgType::Stderr => {
-                bail!("Special stream descriptors are not supported in function signatures")
-            }
         })
     }
 

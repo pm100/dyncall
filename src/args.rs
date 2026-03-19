@@ -81,10 +81,6 @@ pub enum ArgType {
     /// No value (only valid as a return type).
     Void,
 
-    // ── specials ──────────────────────────────────────────────────────────
-    Stdin,
-    Stdout,
-    Stderr,
 }
 impl ArgVal {
     pub(crate) fn payload_ptr(&self) -> *mut c_void {
@@ -543,3 +539,4 @@ impl ToMutArg for StructValue {
         }
     }
 }
+

@@ -93,16 +93,12 @@ impl DynamicLibrary {
 
     /// Access the value at the symbol of the dynamic library
     pub unsafe fn symbol(&self, symbol: &str) -> Result<*mut ffi::c_void> {
-
         let raw_string = CString::new(symbol).unwrap();
-        let maybe_symbol_value =
-            dl::check_for_errors_in(|| dl::symbol(self.handle as *mut u8, raw_string.as_ptr()));
-
-        // The value must not be constructed if there is an error so
-        // the destructor does not run.
-        match maybe_symbol_value {
-            Err(err) => Err(err),
-            Ok(symbol_value) => Ok(mem::transmute(symbol_value)),
+        let ptr = dl::symbol(self.handle as *mut u8, raw_string.as_ptr());
+        if ptr.is_null() {
+            Err(anyhow::anyhow!("Symbol '{}' not found in library", symbol))
+        } else {
+            Ok(mem::transmute(ptr))
         }
     }
 }
@@ -182,7 +178,6 @@ mod dl {
     use std::ffi::OsStr;
     use std::iter::Iterator;
     use anyhow::{anyhow, Result};
-    use std::ops::FnOnce;
     use std::option::Option::{self, None, Some};
     use std::os::windows::prelude::*;
     use std::ptr;
@@ -236,24 +231,6 @@ mod dl {
         }
 
         result
-    }
-
-    pub fn check_for_errors_in<T, F>(f: F) -> Result<T>
-    where
-        F: FnOnce() -> T,
-    {
-        unsafe {
-            SetLastError(0);
-
-            let result = f();
-
-            let error = GetLastError();
-            if 0 == error {
-                Ok(result)
-            } else {
-                Err(anyhow::anyhow!("Error code {}", error))
-            }
-        }
     }
 
     pub unsafe fn symbol(handle: *mut u8, symbol: *const libc::c_char) -> *mut u8 {
