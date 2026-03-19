@@ -61,6 +61,31 @@
 //! let result = inv.call();
 //! assert_eq!(*result.as_i32().unwrap(), 42);
 //! ```
+//!
+//! ## Error capture (`errno` flag)
+//!
+//! Add `errno` to the flags field to capture the platform error code
+//! immediately after the call (before any other code can overwrite it).
+//! The captured value is available via [`Invocation::last_errno`], which
+//! returns `Some(n)` when the flag is set and `None` otherwise.
+//!
+//! ```no_run
+//! use dyncall::DynCaller;
+//! #[cfg(target_os = "windows")] const LIBC: &str = "msvcrt.dll";
+//! #[cfg(target_os = "macos")]   const LIBC: &str = "libSystem.B.dylib";
+//! #[cfg(target_os = "linux")]   const LIBC: &str = "libc.so.6";
+//!
+//! let def = DynCaller::define_function_by_str(
+//!     &format!("{LIBC}|fopen|cstr,cstr|ptr|errno")
+//! ).unwrap();
+//! let mut inv = def.prep();
+//! inv.push_arg(&"__no_such_file__.txt".to_string()).unwrap();
+//! inv.push_arg(&"r".to_string()).unwrap();
+//! let result = inv.call();
+//! if result.as_pointer().map(|p| p.is_null()).unwrap_or(true) {
+//!     println!("fopen failed, errno={}", inv.last_errno().unwrap());
+//! }
+//! ```
 
 //! For struct arguments, create a [`StructValue`] from the argument's declared
 //! type, push each field in order with [`StructValue::push_field`], then pass
