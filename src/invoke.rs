@@ -13,6 +13,15 @@ use crate::{
     args::{ArgType, LengthDef, ToArg, ToMutArg},
     ArgVal, FuncDef,
 };
+
+/// Read the C `errno` value for the current thread.
+/// Must be called immediately after a foreign function returns.
+#[inline(always)]
+fn read_errno() -> i32 {
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(0)
+}
 /// A single prepared call to a foreign function.
 ///
 /// Obtained from [`FuncDef::prep`]. Arguments are pushed in declaration order
@@ -21,12 +30,18 @@ use crate::{
 /// executed with [`call`](Invocation::call) or
 /// [`call_and_return`](Invocation::call_and_return).
 ///
+/// After the call, the C `errno` value set by the foreign function is
+/// available via [`last_errno`](Invocation::last_errno). It is captured
+/// immediately after the foreign function returns, before any other code
+/// can clobber it.
+///
 /// An `Invocation` is single-use: after calling, the argument lists are
 /// cleared. Call [`FuncDef::prep`] again for the next invocation.
 pub struct Invocation<'a> {
     pub(crate) func_def: &'a FuncDef,
     pub(crate) arg_ptrs: Vec<*mut c_void>,
     pub(crate) arg_vals: Vec<ArgVal>,
+    pub(crate) last_errno: Option<i32>,
 }
 impl<'a> Invocation<'a> {
     /// Push an input argument.
@@ -117,6 +132,11 @@ impl<'a> Invocation<'a> {
                 self.arg_ptrs.as_mut_ptr(),
             );
         }
+        self.last_errno = if self.func_def.capture_errno {
+            Some(read_errno())
+        } else {
+            None
+        };
 
         self.post_process_args();
         self.arg_ptrs.clear();
@@ -159,11 +179,35 @@ impl<'a> Invocation<'a> {
                 self.arg_ptrs.as_mut_ptr(),
             );
         }
+        self.last_errno = if self.func_def.capture_errno {
+            Some(read_errno())
+        } else {
+            None
+        };
 
         self.post_process_args();
         self.arg_ptrs.clear();
         self.arg_vals.clear();
         result
+    }
+
+    /// Returns the C `errno` value captured immediately after the last call,
+    /// or `None` if the `errno` flag was not set in the function descriptor.
+    ///
+    /// The value is saved right after the foreign function returns, before any
+    /// other code can overwrite it. Enable capture by adding `errno` to the
+    /// flags field of the descriptor string:
+    ///
+    /// ```text
+    /// "libc.so.6|fopen|cstr,cstr|ptr|errno"
+    /// ```
+    ///
+    /// On Windows, `std::io::Error::last_os_error()` reads `GetLastError()`
+    /// rather than the C `errno`. For functions that set the C `errno` (e.g.
+    /// `fopen`, `fread`), call `_errno()` from `ucrtbase.dll` to get a pointer
+    /// to the thread-local errno, then dereference it.
+    pub fn last_errno(&self) -> Option<i32> {
+        self.last_errno
     }
 
     fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) {

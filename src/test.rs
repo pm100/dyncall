@@ -718,4 +718,35 @@ mod test {
             inv.call();
         }
     }
+
+    #[test]
+    fn test_errno_on_failed_fopen() {
+        // fopen a non-existent file with errno flag; the call should fail (NULL)
+        // and errno should be non-zero (ENOENT = 2 on most platforms).
+        let def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"/this/path/does/not/exist/dyncall_test".to_string())
+            .unwrap();
+        inv.push_arg(&"r".to_string()).unwrap();
+        let result = inv.call();
+        let errno = inv.last_errno().expect("errno flag set but last_errno() returned None");
+        assert!(
+            result.as_pointer().map(|p| p.is_null()).unwrap_or(true),
+            "expected fopen to fail"
+        );
+        assert_ne!(errno, 0, "expected non-zero errno after failed fopen");
+    }
+
+    #[test]
+    fn test_errno_not_captured_without_flag() {
+        // Without the errno flag, last_errno() should return None.
+        let def =
+            DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&(-5i32)).unwrap();
+        let result = inv.call();
+        assert_eq!(*result.as_i32().unwrap(), 5);
+        assert_eq!(inv.last_errno(), None, "expected None when errno flag not set");
+    }
 }

@@ -90,8 +90,28 @@ If neither qualifier is given the buffer is not pre-allocated; the callee must n
 |-------------|-----------------------------------------------------------------------|
 | `fixargs=N` | Variadic function with `N` fixed arguments                            |
 | `coerce`    | Enable automatic type coercion when pushing arguments (see below)     |
+| `errno`     | Capture platform error after call; read via `inv.last_errno()`        |
 
 Flags can be combined with a comma: `fixargs=1,coerce`.
+
+### Error capture (`errno` flag)
+
+Adding `errno` to the flags causes the platform error code to be captured immediately after the foreign function returns — before any other code can overwrite it.
+
+```rust
+let def = DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
+let mut inv = def.prep();
+inv.push_arg(&"/no/such/file".to_string()).unwrap();
+inv.push_arg(&"r".to_string()).unwrap();
+let result = inv.call();
+if result.as_pointer().map(|p| p.is_null()).unwrap_or(true) {
+    println!("fopen failed, errno={}", inv.last_errno().unwrap());
+}
+```
+
+`last_errno()` returns `Some(value)` when the flag is set, `None` when it is not.
+
+**Windows note:** `std::io::Error::last_os_error()` reads `GetLastError()`, not the C `errno`. For functions that set the C errno (e.g. `fopen`, `fread`), the captured value may differ from what `errno.h` would report. Call `_errno()` from `ucrtbase.dll` to get a pointer to the thread-local C errno if needed.
 
 ### Type coercion (`coerce` flag)
 

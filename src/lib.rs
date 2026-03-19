@@ -43,6 +43,7 @@
 //! |---------------|------------------------------------------------------|
 //! | `fixargs=N`   | Variadic function with `N` fixed arguments           |
 //! | `coerce`      | Enable automatic type coercion when pushing arguments|
+//! | `errno`       | Capture platform error after the call; read via [`Invocation::last_errno`]|
 //!
 //! ## Example
 //!

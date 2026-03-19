@@ -42,6 +42,7 @@ pub struct FuncDef {
     pub(crate) arg_types: Vec<ArgType>,
     pub(crate) return_type: ArgType,
     pub(crate) coerce: bool,
+    pub(crate) capture_errno: bool,
 }
 impl FuncDef {
     /// Create an [`Invocation`] ready to accept arguments for this function.
@@ -52,6 +53,7 @@ impl FuncDef {
             func_def: self,
             arg_ptrs: Vec::with_capacity(self.arg_types.len()),
             arg_vals: Vec::with_capacity(self.arg_types.len() * 4),
+            last_errno: None,
         }
     }
     /// Returns the number of declared arguments.
@@ -157,6 +159,7 @@ struct Flags {
     has_fixed_args: bool,
     fixed_args: u8,
     coerce: bool,
+    capture_errno: bool,
 }
 impl DynCaller {
     fn new() -> Self {
@@ -248,9 +251,11 @@ impl DynCaller {
             arg_types: my_arg_types,
             return_type: my_ret,
             coerce: false,
+            capture_errno: false,
         };
         let flags = Self::parse_flags(flag_str)?;
         func.coerce = flags.coerce;
+        func.capture_errno = flags.capture_errno;
         unsafe {
             if flags.has_fixed_args {
                 prep_cif_var(
@@ -281,11 +286,14 @@ impl DynCaller {
             has_fixed_args: false,
             fixed_args: 0,
             coerce: false,
+            capture_errno: false,
         };
         for flag in flag_str.split(',') {
             let flag = flag.trim();
             if flag == "coerce" {
                 flags.coerce = true;
+            } else if flag == "errno" {
+                flags.capture_errno = true;
             } else if let Some(fixed_count) = flag.strip_prefix("fixargs=") {
                 flags.has_fixed_args = true;
                 flags.fixed_args = fixed_count.parse::<u8>()?;
