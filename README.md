@@ -86,9 +86,42 @@ If neither qualifier is given the buffer is not pre-allocated; the callee must n
 
 ### Flags
 
-| Flag        | Meaning                                            |
-|-------------|----------------------------------------------------|
-| `fixargs=N` | Variadic function with `N` fixed arguments         |
+| Flag        | Meaning                                                               |
+|-------------|-----------------------------------------------------------------------|
+| `fixargs=N` | Variadic function with `N` fixed arguments                            |
+| `coerce`    | Enable automatic type coercion when pushing arguments (see below)     |
+
+Flags can be combined with a comma: `fixargs=1,coerce`.
+
+### Type coercion (`coerce` flag)
+
+By default `push_arg` returns `Err` if the Rust type of the value does not match the declared argument type. Adding `coerce` to the flags relaxes this — mismatched types are converted automatically where possible:
+
+| Given value     | Declared type | Coercion applied                              |
+|-----------------|---------------|-----------------------------------------------|
+| any integer     | any integer   | widen or truncate                             |
+| any integer     | `f32`/`f64`   | numeric convert (`42` → `42.0`)               |
+| `f32`/`f64`     | any integer   | truncate (`3.7` → `3`)                        |
+| any integer     | `cstr`        | format as decimal string (`42` → `"42"`)      |
+| `String`/`CStr` | `cstr`        | direct                                        |
+| `String`/`CStr` | any integer   | parse decimal (`"42"` → `42`), `Err` if not valid |
+| incompatible    | any           | `Err`                                         |
+
+```rust
+// Strict mode (default) — i64 into an i32 slot returns Err
+let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+let mut inv = def.prep();
+assert!(inv.push_arg(&42i64).is_err());
+
+// Coerce mode — any numeric type works, strings are parsed
+let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+let mut inv = def.prep();
+inv.push_arg(&42i64).unwrap();        // i64 → i32: truncate
+inv = def.prep();
+inv.push_arg(&"-42".to_string()).unwrap(); // String → i32: parse
+let result = inv.call();
+assert_eq!(*result.as_i32().unwrap(), 42);
+```
 
 ## Examples
 
@@ -103,7 +136,7 @@ use dyncall::DynCaller;
 
 let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
 let mut inv = def.prep();
-inv.push_arg(&"42".to_string());
+inv.push_arg(&"42".to_string()).unwrap();
 let result = inv.call();
 assert_eq!(*result.as_i32().unwrap(), 42);
 ```
@@ -117,9 +150,9 @@ let def = DynCaller::define_function_by_str(
     &format!("{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1")
 ).unwrap();
 let mut inv = def.prep();
-inv.push_arg(&"Hello, %s! You are %d years old.\n".to_string());
-inv.push_arg(&"Alice".to_string());
-inv.push_arg(&30i32);
+inv.push_arg(&"Hello, %s! You are %d years old.\n".to_string()).unwrap();
+inv.push_arg(&"Alice".to_string()).unwrap();
+inv.push_arg(&30i32).unwrap();
 inv.call();
 ```
 
@@ -132,9 +165,9 @@ let def = DynCaller::define_function_by_str(
 ).unwrap();
 let mut ans = 0i32;
 let mut inv = def.prep();
-inv.push_arg(&"42\n".to_string());
-inv.push_arg(&"%d".to_string());
-inv.push_mut_arg(&mut ans);
+inv.push_arg(&"42\n".to_string()).unwrap();
+inv.push_arg(&"%d".to_string()).unwrap();
+inv.push_mut_arg(&mut ans).unwrap();
 inv.call();
 assert_eq!(ans, 42);
 ```
@@ -286,8 +319,8 @@ for (i, arg_value) in arg_values.into_iter().enumerate() {
         invoke.push_mut_arg(&mut out_string_buffer); // output string
     } else {
         match arg_value {
-            Value::Number(n) => invoke.push_arg(&(n as i64)),
-            Value::String(s) => invoke.push_arg(&s),
+            Value::Number(n) => invoke.push_arg(&(n as i64)).unwrap(),
+            Value::String(s) => invoke.push_arg(&s).unwrap(),
         }
     }
 }
