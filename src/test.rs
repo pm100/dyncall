@@ -619,4 +619,103 @@ mod test {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn test_stderr_fputs() {
+        // Get a FILE* for stderr using the platform idiom, then fputs to it.
+        // A non-negative return value from fputs confirms the FILE* was valid.
+        use crate::ArgVal;
+
+        #[cfg(target_os = "windows")]
+        {
+            const UCRT: &str = "ucrtbase.dll";
+            let iob_def =
+                DynCaller::define_function_by_str(&format!("{UCRT}|__acrt_iob_func|u32|ptr|"))
+                    .unwrap();
+            let mut inv = iob_def.prep();
+            inv.push_arg(&2u32).unwrap(); // 2 = stderr
+            let fp = *inv.call().as_pointer().unwrap();
+            assert!(!fp.is_null(), "__acrt_iob_func(2) returned NULL");
+
+            let fputs_def =
+                DynCaller::define_function_by_str(&format!("{UCRT}|fputs|cstr,ptr|i32|")).unwrap();
+            let mut inv = fputs_def.prep();
+            inv.push_arg(&"[dyncall stderr test]\n".to_string()).unwrap();
+            inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+            assert!(*inv.call().as_i32().unwrap() >= 0);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let fopen_def =
+                DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|"))
+                    .unwrap();
+            let mut inv = fopen_def.prep();
+            inv.push_arg(&"/dev/stderr".to_string()).unwrap();
+            inv.push_arg(&"w".to_string()).unwrap();
+            let fp = *inv.call().as_pointer().unwrap();
+            assert!(!fp.is_null(), "fopen(/dev/stderr) returned NULL");
+
+            let fputs_def =
+                DynCaller::define_function_by_str(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
+            let mut inv = fputs_def.prep();
+            inv.push_arg(&"[dyncall stderr test]\n".to_string()).unwrap();
+            inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+            assert!(*inv.call().as_i32().unwrap() >= 0);
+
+            let fclose_def =
+                DynCaller::define_function_by_str(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
+            let mut inv = fclose_def.prep();
+            inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+            inv.call();
+        }
+    }
+
+    #[test]
+    fn test_stdout_fflush() {
+        // Get a FILE* for stdout and fflush it — should return 0 (success).
+        use crate::ArgVal;
+
+        #[cfg(target_os = "windows")]
+        {
+            const UCRT: &str = "ucrtbase.dll";
+            let iob_def =
+                DynCaller::define_function_by_str(&format!("{UCRT}|__acrt_iob_func|u32|ptr|"))
+                    .unwrap();
+            let mut inv = iob_def.prep();
+            inv.push_arg(&1u32).unwrap(); // 1 = stdout
+            let fp = *inv.call().as_pointer().unwrap();
+            assert!(!fp.is_null(), "__acrt_iob_func(1) returned NULL");
+
+            let fflush_def =
+                DynCaller::define_function_by_str(&format!("{UCRT}|fflush|ptr|i32|")).unwrap();
+            let mut inv = fflush_def.prep();
+            inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+            assert_eq!(*inv.call().as_i32().unwrap(), 0);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let fopen_def =
+                DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|"))
+                    .unwrap();
+            let mut inv = fopen_def.prep();
+            inv.push_arg(&"/dev/stdout".to_string()).unwrap();
+            inv.push_arg(&"w".to_string()).unwrap();
+            let fp = *inv.call().as_pointer().unwrap();
+            assert!(!fp.is_null(), "fopen(/dev/stdout) returned NULL");
+
+            let fflush_def =
+                DynCaller::define_function_by_str(&format!("{LIBC}|fflush|ptr|i32|")).unwrap();
+            let mut inv = fflush_def.prep();
+            inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+            assert_eq!(*inv.call().as_i32().unwrap(), 0);
+
+            let fclose_def =
+                DynCaller::define_function_by_str(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
+            let mut inv = fclose_def.prep();
+            inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
+            inv.call();
+        }
+    }
 }
