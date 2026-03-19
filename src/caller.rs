@@ -41,6 +41,7 @@ pub struct FuncDef {
     _ffi_owned_types: Arc<Vec<OwnedStructFfiType>>,
     pub(crate) arg_types: Vec<ArgType>,
     pub(crate) return_type: ArgType,
+    pub(crate) coerce: bool,
 }
 impl FuncDef {
     /// Create an [`Invocation`] ready to accept arguments for this function.
@@ -64,6 +65,11 @@ impl FuncDef {
     /// Returns the declared return [`ArgType`].
     pub fn get_return_type(&self) -> &ArgType {
         &self.return_type
+    }
+
+    /// Returns `true` if type coercion is enabled for this function.
+    pub fn is_coerce(&self) -> bool {
+        self.coerce
     }
 
     /// Create an empty [`StructValue`] for the declared argument at `index`.
@@ -153,6 +159,7 @@ impl FfiTypeStore {
 struct Flags {
     has_fixed_args: bool,
     fixed_args: u8,
+    coerce: bool,
 }
 impl DynCaller {
     fn new() -> Self {
@@ -243,8 +250,10 @@ impl DynCaller {
             _ffi_owned_types: ffi_store.into_arc(),
             arg_types: my_arg_types,
             return_type: my_ret,
+            coerce: false,
         };
         let flags = Self::parse_flags(flag_str)?;
+        func.coerce = flags.coerce;
         unsafe {
             if flags.has_fixed_args {
                 prep_cif_var(
@@ -274,11 +283,17 @@ impl DynCaller {
         let mut flags = Flags {
             has_fixed_args: false,
             fixed_args: 0,
+            coerce: false,
         };
         for flag in flag_str.split(',') {
-            if let Some(fixed_count) = flag.strip_prefix("fixargs=") {
+            let flag = flag.trim();
+            if flag == "coerce" {
+                flags.coerce = true;
+            } else if let Some(fixed_count) = flag.strip_prefix("fixargs=") {
                 flags.has_fixed_args = true;
                 flags.fixed_args = fixed_count.parse::<u8>()?;
+            } else if !flag.is_empty() {
+                bail!("Unknown flag: {}", flag);
             }
         }
         Ok(flags)

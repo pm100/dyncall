@@ -1,5 +1,6 @@
 use std::{ffi::c_void, ptr};
 
+use anyhow::{bail, Result};
 use libc::strlen;
 use libffi::raw::{
     ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER, FFI_TYPE_SINT16, FFI_TYPE_SINT32,
@@ -31,31 +32,37 @@ impl<'a> Invocation<'a> {
     /// Push an input argument.
     ///
     /// Arguments must be pushed in the same order as declared in the [`FuncDef`].
-    pub fn push_arg<T>(&mut self, value: &T)
+    /// Returns an error if the argument type does not match the declared type (strict mode)
+    /// or if coercion fails (coerce mode).
+    pub fn push_arg<T>(&mut self, value: &T) -> Result<()>
     where
         T: ToArg + ?Sized,
     {
         let val_count = self.arg_vals.len();
-        // to_arg must push 2 values onto the arg_vals stack
-        let argp = value.to_arg(self);
-        assert!(self.arg_vals.len() - val_count == 2);
-
+        let argp = value.to_arg(self)?;
+        if self.arg_vals.len() - val_count != 2 {
+            bail!("ToArg impl must push exactly 2 ArgVal entries");
+        }
         self.arg_ptrs.push(argp);
+        Ok(())
     }
+
     /// Push an output argument.
     ///
     /// The callee writes its result through a pointer to `value`. After
     /// [`call`](Invocation::call) or [`call_and_return`](Invocation::call_and_return)
     /// returns, `value` contains the result written by the callee.
-    pub fn push_mut_arg<T>(&mut self, value: &mut T)
+    pub fn push_mut_arg<T>(&mut self, value: &mut T) -> Result<()>
     where
         T: ToMutArg + ?Sized,
     {
         let val_count = self.arg_vals.len();
-        // to_mut_arg must push 2 values onto the arg_vals stack
-        let argp = value.to_mut_arg(self);
-        assert!(self.arg_vals.len() - val_count == 2);
+        let argp = value.to_mut_arg(self)?;
+        if self.arg_vals.len() - val_count != 2 {
+            bail!("ToMutArg impl must push exactly 2 ArgVal entries");
+        }
         self.arg_ptrs.push(argp);
+        Ok(())
     }
 
     /// Returns the [`ArgType`] for the argument at `index`.

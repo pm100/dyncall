@@ -63,7 +63,7 @@ mod test {
         let atoidef = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
         let mut atoi = atoidef.prep();
         let str = "12345".to_string();
-        atoi.push_arg(&str);
+        atoi.push_arg(&str).unwrap();
         let mut ret: i32 = 0;
         let retp = &raw mut ret;
         atoi.call_and_return(retp as *mut c_void);
@@ -75,7 +75,7 @@ mod test {
         let atoidef = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
         let mut atoi = atoidef.prep();
         let str = "12345".to_string();
-        atoi.push_arg(&str);
+        atoi.push_arg(&str).unwrap();
         let ret = atoi.call();
         println!("atoi ret={:?}", ret.as_i32().unwrap());
         assert_eq!(*ret.as_i32().unwrap(), 12345);
@@ -91,15 +91,15 @@ mod test {
         let mut fread = fread_def.prep();
         let name = "test.txt2".to_string();
         let mode = "r".to_string();
-        fopen.push_arg(&name);
-        fopen.push_arg(&mode);
+        fopen.push_arg(&name).unwrap();
+        fopen.push_arg(&mode).unwrap();
         let ret = fopen.call();
         println!("fopen ret={:x}", ret.as_u64().unwrap());
         let mut buffer: String = String::with_capacity(100);
-        fread.push_arg(&(1i32));
-        fread.push_arg(&(50i32));
-        fread.push_mut_arg(&mut buffer);
-        fread.push_arg(&ret);
+        fread.push_arg(&(1i32)).unwrap();
+        fread.push_arg(&(50i32)).unwrap();
+        fread.push_mut_arg(&mut buffer).unwrap();
+        fread.push_arg(&ret).unwrap();
         let ret2 = fread.call();
         println!("fgets  ret={:?}", ret2.as_i32().unwrap());
         let rlen = ret2.as_i32().unwrap();
@@ -120,14 +120,14 @@ mod test {
         let mut fgets = fgets_def.prep();
         let name = "test.txt2".to_string();
         let mode = "r".to_string();
-        fopen.push_arg(&name);
-        fopen.push_arg(&mode);
+        fopen.push_arg(&name).unwrap();
+        fopen.push_arg(&mode).unwrap();
         let ret = fopen.call();
         println!("fopen ret={:x}", ret.as_u64().unwrap());
         let mut buffer: String = String::with_capacity(100);
-        fgets.push_mut_arg(&mut buffer);
-        fgets.push_arg(&(50i32));
-        fgets.push_arg(&ret);
+        fgets.push_mut_arg(&mut buffer).unwrap();
+        fgets.push_arg(&(50i32)).unwrap();
+        fgets.push_arg(&ret).unwrap();
         let ret2 = fgets.call();
         println!("fgets  ret={:?}", ret2.as_i32().unwrap());
         println!("buffer read: {}", buffer);
@@ -143,9 +143,9 @@ mod test {
         let name = "Alice".to_string();
         let age = 30i32;
         let mut printf = printf_def.prep();
-        printf.push_arg(&format);
-        printf.push_arg(&name);
-        printf.push_arg(&age);
+        printf.push_arg(&format).unwrap();
+        printf.push_arg(&name).unwrap();
+        printf.push_arg(&age).unwrap();
         let ret = printf.call();
         println!("printf ret={:?}", ret.as_i32().unwrap());
     }
@@ -160,9 +160,9 @@ mod test {
         let format = "%s".to_string();
         let mut ans = String::new();
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
     }
@@ -177,9 +177,9 @@ mod test {
         let format = "%d".to_string();
         let mut ans = 0i32;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 42);
@@ -196,9 +196,9 @@ mod test {
         let format = "%u".to_string();
         let mut ans = 0u32;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 4_294_967_295);
@@ -215,9 +215,9 @@ mod test {
         let format = "%llu".to_string();
         let mut ans = 0u64;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 18_446_744_073_709_551_615);
@@ -234,9 +234,9 @@ mod test {
         let format = "%lld".to_string();
         let mut ans = 0i64;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, -9_223_372_036_854_775_808);
@@ -253,9 +253,9 @@ mod test {
         let format = "%f".to_string();
         let mut ans = 0f32;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert!((ans - 3.14f32).abs() < 1e-4);
@@ -272,9 +272,9 @@ mod test {
         let format = "%hd".to_string();
         let mut ans = 0i16;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 32767i16);
@@ -291,9 +291,9 @@ mod test {
         let format = "%hu".to_string();
         let mut ans = 0u16;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 65535u16);
@@ -310,9 +310,9 @@ mod test {
         let format = "%hhd".to_string();
         let mut ans = 0i8;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 127i8);
@@ -329,9 +329,9 @@ mod test {
         let format = "%hhu".to_string();
         let mut ans = 0u8;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 255u8);
@@ -348,9 +348,9 @@ mod test {
         let format = "%lf".to_string();
         let mut ans = 0f64;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut ans);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert!((ans - 3.14159).abs() < 1e-9);
@@ -373,14 +373,14 @@ mod test {
         let mut i64v = 0i64;
         let mut f64v = 0f64;
         let mut sscanf = sscanf_def.prep();
-        sscanf.push_arg(&instr);
-        sscanf.push_arg(&format);
-        sscanf.push_mut_arg(&mut out);
-        sscanf.push_mut_arg(&mut i32v);
-        sscanf.push_mut_arg(&mut u32v);
-        sscanf.push_mut_arg(&mut u64v);
-        sscanf.push_mut_arg(&mut i64v);
-        sscanf.push_mut_arg(&mut f64v);
+        sscanf.push_arg(&instr).unwrap();
+        sscanf.push_arg(&format).unwrap();
+        sscanf.push_mut_arg(&mut out).unwrap();
+        sscanf.push_mut_arg(&mut i32v).unwrap();
+        sscanf.push_mut_arg(&mut u32v).unwrap();
+        sscanf.push_mut_arg(&mut u64v).unwrap();
+        sscanf.push_mut_arg(&mut i64v).unwrap();
+        sscanf.push_mut_arg(&mut f64v).unwrap();
         let ret = sscanf.call();
         println!(
             "sscanf ret={:?} out={} i32={} u32={} u64={} i64={} f64={}",
@@ -410,7 +410,7 @@ mod test {
         let mut pair = inv.create_struct(0).unwrap();
         pair.push_field(&10u32).unwrap();
         pair.push_field(&32u32).unwrap();
-        inv.push_arg(&pair);
+        inv.push_arg(&pair).unwrap();
         let ret = inv.call();
         assert_eq!(*ret.as_u32().unwrap(), 42);
     }
@@ -425,7 +425,7 @@ mod test {
         let mut pair = def.create_struct(0).unwrap();
         pair.push_field(&11u32).unwrap();
         pair.push_field(&31u32).unwrap();
-        inv.push_mut_arg(&mut pair);
+        inv.push_mut_arg(&mut pair).unwrap();
         let ret = inv.call();
         assert_eq!(*ret.as_u32().unwrap(), 42);
     }
@@ -439,7 +439,7 @@ mod test {
         let mut pair = def.create_struct(0).unwrap();
         pair.push_field(&7u32).unwrap();
         pair.push_field(&8u32).unwrap();
-        inv.push_mut_arg(&mut pair);
+        inv.push_mut_arg(&mut pair).unwrap();
         let ret = inv.call();
         assert_eq!(*ret.as_u32().unwrap(), 18);
         assert_eq!(pair.read_field::<u32>(0).unwrap(), 8);
@@ -475,22 +475,101 @@ mod test {
         tm.push_field(&(-1i32)).unwrap();
 
         let mut mktime = mktime_def.prep();
-        mktime.push_mut_arg(&mut tm);
+        mktime.push_mut_arg(&mut tm).unwrap();
         let mktime_ret = mktime.call();
         assert_ne!(*mktime_ret.as_i64().unwrap(), -1);
 
         let format = "%Y-%m-%d %H:%M:%S".to_string();
         let mut output = String::new();
         let mut strftime = strftime_def.prep();
-        strftime.push_mut_arg(&mut output);
-        strftime.push_arg(&64u64);
-        strftime.push_arg(&format);
-        strftime.push_mut_arg(&mut tm);
+        strftime.push_mut_arg(&mut output).unwrap();
+        strftime.push_arg(&64u64).unwrap();
+        strftime.push_arg(&format).unwrap();
+        strftime.push_mut_arg(&mut tm).unwrap();
         let strftime_ret = strftime.call();
 
         assert_eq!(*strftime_ret.as_u64().unwrap(), 19);
         assert_eq!(output, "2024-01-02 03:04:05");
         assert_eq!(tm.read_field::<i32>(6).unwrap(), 2);
         assert_eq!(tm.read_field::<i32>(7).unwrap(), 1);
+    }
+
+    // ── coerce tests ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_coerce_i64_into_i32_strict_errors() {
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_arg(&100i64).is_err());
+    }
+
+    #[test]
+    fn test_coerce_i64_into_i32_with_coerce() {
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&(-42i64)).unwrap();
+        let result = inv.call();
+        assert_eq!(*result.as_i32().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_coerce_string_into_cstr_slot() {
+        // String → cstr slot: works in both strict and coerce mode
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|coerce")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"42".to_string()).unwrap();
+        let result = inv.call();
+        assert_eq!(*result.as_i32().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_coerce_int_into_cstr_slot() {
+        // int → cstr: format as decimal
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|coerce")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&42i32).unwrap();
+        let result = inv.call();
+        assert_eq!(*result.as_i32().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_coerce_string_into_int_slot() {
+        // str → int: parse "42" → 42
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"42".to_string()).unwrap();
+        let result = inv.call();
+        assert_eq!(*result.as_i32().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_coerce_invalid_string_into_int_slot_errors() {
+        // str → int parse failure: should error
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_arg(&"hello".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_coerce_strict_type_mismatch_errors() {
+        // Without coerce: i64 for i32 slot → Err
+        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_arg(&42i64).is_err());
+    }
+
+    #[test]
+    fn test_coerce_multiple_flags() {
+        // fixargs=1,coerce together
+        let def = DynCaller::define_function_by_str(&format!(
+            "{LIBC}|printf|cstr,i32|i32|fixargs=1,coerce"
+        ))
+        .unwrap();
+        assert!(def.is_coerce());
+        let mut inv = def.prep();
+        inv.push_arg(&"value: %d\n".to_string()).unwrap();
+        inv.push_arg(&99i64).unwrap(); // i64 coerced to declared i32
+        let ret = inv.call();
+        assert!(*ret.as_i32().unwrap() > 0);
     }
 }

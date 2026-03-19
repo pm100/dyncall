@@ -42,6 +42,7 @@
 //! | Flag          | Meaning                                              |
 //! |---------------|------------------------------------------------------|
 //! | `fixargs=N`   | Variadic function with `N` fixed arguments           |
+//! | `coerce`      | Enable automatic type coercion when pushing arguments|
 //!
 //! ## Example
 //!
@@ -55,7 +56,7 @@
 //!
 //! let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
 //! let mut inv = def.prep();
-//! inv.push_arg(&"42".to_string());
+//! inv.push_arg(&"42".to_string()).unwrap();
 //! let result = inv.call();
 //! assert_eq!(*result.as_i32().unwrap(), 42);
 //! ```
@@ -66,6 +67,7 @@
 
 pub mod args;
 pub mod caller;
+pub(crate) mod coerce;
 mod dylib;
 pub mod invoke;
 pub mod structs;
