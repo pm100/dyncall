@@ -16,6 +16,13 @@ use crate::{
 
 /// Read the C `errno` value for the current thread.
 /// Must be called immediately after a foreign function returns.
+///
+/// On Windows, returns the Win32 error code from `GetLastError()`.
+/// C `errno` cannot be read portably because it is stored per-CRT instance
+/// and the called function may use a different CRT than this crate.
+/// For most file I/O errors the Win32 and errno values coincide
+/// (e.g. `ERROR_FILE_NOT_FOUND` = 2 = `ENOENT`), but they differ for some
+/// errors (e.g. `EACCES` = 13 vs `ERROR_ACCESS_DENIED` = 5).
 #[inline(always)]
 fn read_errno() -> i32 {
     std::io::Error::last_os_error()
@@ -191,7 +198,7 @@ impl<'a> Invocation<'a> {
         result
     }
 
-    /// Returns the C `errno` value captured immediately after the last call,
+    /// Returns the platform error code captured immediately after the last call,
     /// or `None` if the `errno` flag was not set in the function descriptor.
     ///
     /// The value is saved right after the foreign function returns, before any
@@ -202,10 +209,13 @@ impl<'a> Invocation<'a> {
     /// "libc.so.6|fopen|cstr,cstr|ptr|errno"
     /// ```
     ///
-    /// On Windows, `std::io::Error::last_os_error()` reads `GetLastError()`
-    /// rather than the C `errno`. For functions that set the C `errno` (e.g.
-    /// `fopen`, `fread`), call `_errno()` from `ucrtbase.dll` to get a pointer
-    /// to the thread-local errno, then dereference it.
+    /// **Platform behaviour:**
+    /// - **Linux / macOS**: returns the C `errno` value (e.g. `ENOENT` = 2).
+    /// - **Windows**: returns the Win32 error code from `GetLastError()`.
+    ///   C `errno` cannot be read reliably because it is stored per-CRT instance
+    ///   and the callee may use a different CRT. For common file I/O errors the
+    ///   values coincide (`ERROR_FILE_NOT_FOUND` = 2 = `ENOENT`), but they differ
+    ///   for others (`EACCES` = 13 vs `ERROR_ACCESS_DENIED` = 5).
     pub fn last_errno(&self) -> Option<i32> {
         self.last_errno
     }
