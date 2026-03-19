@@ -258,6 +258,43 @@ Compare two strings with `strcmp`:
 30 PRINT "strcmp result: "; result
 ```
 
+## Standard streams on Windows
+
+Passing `stdin`, `stdout`, or `stderr` as a `FILE *` to native functions (e.g. `fputs`, `fflush`) requires care on Windows due to CRT instance isolation.
+
+**The problem:** Windows ships multiple C runtimes (`msvcrt.dll`, `ucrtbase.dll`, etc.). Each maintains its own internal `FILE` table. If you obtain a `FILE *` from one CRT and pass it to a function from a different CRT, the call silently fails or crashes.
+
+**The solution:** Use `__acrt_iob_func` from `ucrtbase.dll` to obtain a standard stream handle, then call I/O functions from the same `ucrtbase.dll`:
+
+```rust
+#[cfg(windows)] const LIBC: &str = "ucrtbase.dll";
+
+// Get FILE* for stderr (0=stdin, 1=stdout, 2=stderr)
+let iob_def = DynCaller::define_function_by_str(&format!("{LIBC}|__acrt_iob_func|u32|ptr|")).unwrap();
+let mut inv = iob_def.prep();
+inv.push_arg(&2u32).unwrap();
+let stderr_fp = *inv.call().as_pointer().unwrap();
+
+// fputs(msg, stderr)
+let fputs_def = DynCaller::define_function_by_str(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
+let mut inv = fputs_def.prep();
+inv.push_arg(&"hello from dyncall".to_string()).unwrap();
+inv.push_arg(&ArgVal::Pointer(stderr_fp)).unwrap();
+inv.call();
+```
+
+Note that `ucrtbase.dll` does **not** export `printf`, `fprintf`, `sscanf`, or `mktime`. Those remain in `msvcrt.dll`. Only use `ucrtbase.dll` for calls that accept or return `FILE *` handles.
+
+In the BASIC integration, the same pattern works by storing the returned pointer in a variable and passing it back as a subsequent argument:
+
+```basic
+10 DEF XFN c_iob("ucrtbase.dll|__acrt_iob_func|u32|ptr|coerce")
+20 DEF XFN c_fputs("ucrtbase.dll|fputs|cstr,ptr|i32|")
+30 LET fp = FN c_iob(2)
+40 LET r = FN c_fputs("hello from BASIC", fp)
+```
+
+
 Parse an integer out of a string with `sscanf` (output pointer argument):
 
 ```basic
