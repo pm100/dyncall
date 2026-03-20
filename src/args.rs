@@ -227,166 +227,64 @@ impl ToArg for CStr {
     }
 }
 
-impl ToArg for u64 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::U64) {
-            func.arg_vals.push(ArgVal::U64(*self));
-            func.arg_vals.push(ArgVal::U64(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got u64", declared)
+/// Implements `ToArg` for integer-like primitive types.
+///
+/// `$rust_ty`       — the Rust source type (e.g. `i32`)
+/// `$arg_type_pat`  — the `ArgType` variant to match (e.g. `I32`)
+/// `$arg_val_ctor`  — the `ArgVal` constructor to use  (e.g. `I32`)
+macro_rules! impl_to_arg_int {
+    ($rust_ty:ty, $arg_type_pat:ident, $arg_val_ctor:ident) => {
+        impl ToArg for $rust_ty {
+            fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
+                let arg_idx = func.arg_ptrs.len();
+                let declared = func.func_def.arg_types[arg_idx].clone();
+                if matches!(declared, ArgType::$arg_type_pat) {
+                    func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
+                    func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
+                    let pp = &func.arg_vals[func.arg_vals.len() - 1];
+                    Ok(pp.payload_ptr())
+                } else if func.func_def.coerce {
+                    crate::coerce::push_coerced_int(func, *self as i64, &declared)
+                } else {
+                    bail!("Type mismatch: expected {:?}, got {}", declared, stringify!($rust_ty))
+                }
+            }
         }
-    }
+    };
 }
-impl ToArg for u8 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::Char) {
-            func.arg_vals.push(ArgVal::Char(*self));
-            func.arg_vals.push(ArgVal::Char(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got u8", declared)
+
+/// Implements `ToArg` for floating-point primitive types.
+macro_rules! impl_to_arg_float {
+    ($rust_ty:ty, $arg_type_pat:ident, $arg_val_ctor:ident) => {
+        impl ToArg for $rust_ty {
+            fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
+                let arg_idx = func.arg_ptrs.len();
+                let declared = func.func_def.arg_types[arg_idx].clone();
+                if matches!(declared, ArgType::$arg_type_pat) {
+                    func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
+                    func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
+                    let pp = &func.arg_vals[func.arg_vals.len() - 1];
+                    Ok(pp.payload_ptr())
+                } else if func.func_def.coerce {
+                    crate::coerce::push_coerced_float(func, *self as f64, &declared)
+                } else {
+                    bail!("Type mismatch: expected {:?}, got {}", declared, stringify!($rust_ty))
+                }
+            }
         }
-    }
+    };
 }
-impl ToArg for i8 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::Char) {
-            func.arg_vals.push(ArgVal::Char(*self as u8));
-            func.arg_vals.push(ArgVal::Char(*self as u8));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got i8", declared)
-        }
-    }
-}
-impl ToArg for i64 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::I64) {
-            func.arg_vals.push(ArgVal::I64(*self));
-            func.arg_vals.push(ArgVal::I64(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got i64", declared)
-        }
-    }
-}
-impl ToArg for u32 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::U32) {
-            func.arg_vals.push(ArgVal::U32(*self));
-            func.arg_vals.push(ArgVal::U32(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got u32", declared)
-        }
-    }
-}
-impl ToArg for i32 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::I32) {
-            func.arg_vals.push(ArgVal::I32(*self));
-            func.arg_vals.push(ArgVal::I32(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got i32", declared)
-        }
-    }
-}
-impl ToArg for i16 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::I16) {
-            func.arg_vals.push(ArgVal::I16(*self));
-            func.arg_vals.push(ArgVal::I16(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got i16", declared)
-        }
-    }
-}
-impl ToArg for u16 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::U16) {
-            func.arg_vals.push(ArgVal::U16(*self));
-            func.arg_vals.push(ArgVal::U16(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_int(func, *self as i64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got u16", declared)
-        }
-    }
-}
-impl ToArg for f32 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::F32) {
-            func.arg_vals.push(ArgVal::F32(*self));
-            func.arg_vals.push(ArgVal::F32(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_float(func, *self as f64, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got f32", declared)
-        }
-    }
-}
-impl ToArg for f64 {
-    fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
-        let arg_idx = func.arg_ptrs.len();
-        let declared = func.func_def.arg_types[arg_idx].clone();
-        if matches!(declared, ArgType::F64) {
-            func.arg_vals.push(ArgVal::F64(*self));
-            func.arg_vals.push(ArgVal::F64(*self));
-            let pp = &func.arg_vals[func.arg_vals.len() - 1];
-            Ok(pp.payload_ptr())
-        } else if func.func_def.coerce {
-            crate::coerce::push_coerced_float(func, *self, &declared)
-        } else {
-            bail!("Type mismatch: expected {:?}, got f64", declared)
-        }
-    }
-}
+
+impl_to_arg_int!(u64, U64,  U64);
+impl_to_arg_int!(i64, I64,  I64);
+impl_to_arg_int!(u32, U32,  U32);
+impl_to_arg_int!(i32, I32,  I32);
+impl_to_arg_int!(u16, U16,  U16);
+impl_to_arg_int!(i16, I16,  I16);
+impl_to_arg_int!(u8,  Char, Char);
+impl_to_arg_int!(i8,  Char, Char);
+impl_to_arg_float!(f64, F64, F64);
+impl_to_arg_float!(f32, F32, F32);
 impl ToMutArg for ArgVal {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
         func.arg_vals.push(self.clone());
@@ -404,123 +302,31 @@ impl ToArg for ArgVal {
     }
 }
 
-impl ToMutArg for i32 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i32 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i32 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-impl ToMutArg for u32 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u32 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u32 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
+/// Implements `ToMutArg` for primitive types that are passed as `*mut T` pointers.
+macro_rules! impl_to_mut_arg_primitive {
+    ($ty:ty) => {
+        impl ToMutArg for $ty {
+            fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
+                func.arg_vals.push(ArgVal::Pointer(self as *mut $ty as *mut c_void));
+                func.arg_vals.push(ArgVal::Pointer(self as *mut $ty as *mut c_void));
+                let pp = &func.arg_vals[func.arg_vals.len() - 1];
+                Ok(pp.payload_ptr())
+            }
+        }
+    };
 }
 
-impl ToMutArg for i64 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i64 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i64 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-impl ToMutArg for u64 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u64 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u64 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-impl ToMutArg for usize {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut usize as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut usize as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-
-impl ToMutArg for f64 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut f64 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut f64 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-
-impl ToMutArg for f32 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut f32 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut f32 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-
-impl ToMutArg for i16 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i16 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i16 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-
-impl ToMutArg for u16 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u16 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u16 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-
-impl ToMutArg for i8 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i8 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut i8 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
-
-impl ToMutArg for u8 {
-    fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u8 as *mut c_void));
-        func.arg_vals
-            .push(ArgVal::Pointer(self as *mut u8 as *mut c_void));
-        let pp = &func.arg_vals[func.arg_vals.len() - 1];
-        Ok(pp.payload_ptr())
-    }
-}
+impl_to_mut_arg_primitive!(i8);
+impl_to_mut_arg_primitive!(u8);
+impl_to_mut_arg_primitive!(i16);
+impl_to_mut_arg_primitive!(u16);
+impl_to_mut_arg_primitive!(i32);
+impl_to_mut_arg_primitive!(u32);
+impl_to_mut_arg_primitive!(i64);
+impl_to_mut_arg_primitive!(u64);
+impl_to_mut_arg_primitive!(usize);
+impl_to_mut_arg_primitive!(f32);
+impl_to_mut_arg_primitive!(f64);
 
 impl ToMutArg for StructValue {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {

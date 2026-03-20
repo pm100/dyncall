@@ -60,20 +60,10 @@ impl<'a> Invocation<'a> {
     where
         T: ToArg + ?Sized,
     {
-        if self.arg_ptrs.len() >= self.func_def.arg_types.len() {
-            bail!(
-                "too many arguments: function takes {}, already pushed {}",
-                self.func_def.arg_types.len(),
-                self.arg_ptrs.len()
-            );
-        }
+        self.check_arg_count()?;
         let val_count = self.arg_vals.len();
         let argp = value.to_arg(self)?;
-        if self.arg_vals.len() - val_count != 2 {
-            bail!("ToArg impl must push exactly 2 ArgVal entries");
-        }
-        self.arg_ptrs.push(argp);
-        Ok(())
+        self.finish_push(argp, val_count)
     }
 
     /// Push an output argument.
@@ -86,6 +76,13 @@ impl<'a> Invocation<'a> {
     where
         T: ToMutArg + ?Sized,
     {
+        self.check_arg_count()?;
+        let val_count = self.arg_vals.len();
+        let argp = value.to_mut_arg(self)?;
+        self.finish_push(argp, val_count)
+    }
+
+    fn check_arg_count(&self) -> Result<()> {
         if self.arg_ptrs.len() >= self.func_def.arg_types.len() {
             bail!(
                 "too many arguments: function takes {}, already pushed {}",
@@ -93,10 +90,12 @@ impl<'a> Invocation<'a> {
                 self.arg_ptrs.len()
             );
         }
-        let val_count = self.arg_vals.len();
-        let argp = value.to_mut_arg(self)?;
-        if self.arg_vals.len() - val_count != 2 {
-            bail!("ToMutArg impl must push exactly 2 ArgVal entries");
+        Ok(())
+    }
+
+    fn finish_push(&mut self, argp: *mut c_void, prev_val_count: usize) -> Result<()> {
+        if self.arg_vals.len() - prev_val_count != 2 {
+            bail!("ToArg/ToMutArg impl must push exactly 2 ArgVal entries");
         }
         self.arg_ptrs.push(argp);
         Ok(())
@@ -204,21 +203,25 @@ impl<'a> Invocation<'a> {
         self.last_errno
     }
 
-    fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) {
-        let len = match ldef {
+    fn resolve_length(&self, ldef: &LengthDef) -> Option<usize> {
+        match ldef {
             LengthDef::Arg(argnum) => {
                 let len = match self.arg_vals.get((*argnum * 2 + 1) as usize) {
                     Some(ArgVal::U32(v)) => *v as usize,
                     Some(ArgVal::I32(v)) => *v as usize,
                     Some(ArgVal::U64(v)) => *v as usize,
                     Some(ArgVal::I64(v)) => *v as usize,
-                    _ => panic!("Invalid length arg type for OCString"),
+                    _ => panic!("Invalid length arg type for output buffer"),
                 };
-                len
+                Some(len)
             }
-            LengthDef::Fixed(len) => *len,
-            LengthDef::None => return,
-        };
+            LengthDef::Fixed(len) => Some(*len),
+            LengthDef::None => None,
+        }
+    }
+
+    fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) {
+        let Some(len) = self.resolve_length(ldef) else { return };
         if let ArgVal::RustString(str) = &mut self.arg_vals[arg_idx * 2 + 1] {
             let s = unsafe { &mut **str };
             s.reserve(len + 1); // +1 for null terminator
@@ -228,20 +231,7 @@ impl<'a> Invocation<'a> {
     }
 
     fn pre_process_obytebuffer(&mut self, arg_idx: usize, ldef: &LengthDef) {
-        let len = match ldef {
-            LengthDef::Arg(argnum) => {
-                let len = match self.arg_vals.get((*argnum * 2 + 1) as usize) {
-                    Some(ArgVal::U32(v)) => *v as usize,
-                    Some(ArgVal::I32(v)) => *v as usize,
-                    Some(ArgVal::U64(v)) => *v as usize,
-                    Some(ArgVal::I64(v)) => *v as usize,
-                    _ => panic!("Invalid length arg type for OByteBuffer"),
-                };
-                len
-            }
-            LengthDef::Fixed(len) => *len,
-            LengthDef::None => return,
-        };
+        let Some(len) = self.resolve_length(ldef) else { return };
         match &mut self.arg_vals[arg_idx * 2 + 1] {
             ArgVal::RustString(str) => {
                 let s = unsafe { &mut **str };
