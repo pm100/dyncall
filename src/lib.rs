@@ -8,10 +8,10 @@
 //!
 //! ## Workflow
 //!
-//! 1. Define a function using a descriptor string with [`DynCaller::define_function_by_str`].
+//! 1. Define a function using a descriptor string with [`DynCaller::define_function`].
 //! 2. Prepare an [`Invocation`] from the [`FuncDef`] via [`FuncDef::prep`].
 //! 3. Push arguments with [`Invocation::push_arg`] (input) or [`Invocation::push_mut_arg`] (output).
-//! 4. Call with [`Invocation::call`] or [`Invocation::call_and_return`].
+//! 4. Call with [`Invocation::call`].
 //!
 //! ## Function descriptor format
 //!
@@ -55,10 +55,10 @@
 //! #[cfg(target_os = "macos")]   const LIBC: &str = "libSystem.B.dylib";
 //! #[cfg(target_os = "linux")]   const LIBC: &str = "libc.so.6";
 //!
-//! let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+//! let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
 //! let mut inv = def.prep();
 //! inv.push_arg(&"42".to_string()).unwrap();
-//! let result = inv.call();
+//! let result = inv.call().unwrap();
 //! assert_eq!(*result.as_i32().unwrap(), 42);
 //! ```
 //!
@@ -75,13 +75,13 @@
 //! #[cfg(target_os = "macos")]   const LIBC: &str = "libSystem.B.dylib";
 //! #[cfg(target_os = "linux")]   const LIBC: &str = "libc.so.6";
 //!
-//! let def = DynCaller::define_function_by_str(
+//! let def = DynCaller::define_function(
 //!     &format!("{LIBC}|fopen|cstr,cstr|ptr|errno")
 //! ).unwrap();
 //! let mut inv = def.prep();
 //! inv.push_arg(&"__no_such_file__.txt".to_string()).unwrap();
 //! inv.push_arg(&"r".to_string()).unwrap();
-//! let result = inv.call();
+//! let result = inv.call().unwrap();
 //! if result.as_pointer().map(|p| p.is_null()).unwrap_or(true) {
 //!     println!("fopen failed, errno={}", inv.last_errno().unwrap());
 //! }
@@ -108,17 +108,17 @@
 //! #[cfg(target_os = "macos")]  const LIBC: &str = "libSystem.B.dylib";
 //! # #[cfg(not(any(target_os = "linux", target_os = "macos")))] const LIBC: &str = "";
 //!
-//! let fopen = DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
+//! let fopen = DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
 //! let mut inv = fopen.prep();
 //! inv.push_arg(&"/dev/stderr".to_string()).unwrap();
 //! inv.push_arg(&"w".to_string()).unwrap();
-//! let stderr_fp = *inv.call().as_pointer().unwrap();
+//! let stderr_fp = *inv.call().unwrap().as_pointer().unwrap();
 //!
-//! let fputs = DynCaller::define_function_by_str(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
+//! let fputs = DynCaller::define_function(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
 //! let mut inv = fputs.prep();
 //! inv.push_arg(&"hello from dyncall\n".to_string()).unwrap();
 //! inv.push_arg(&ArgVal::Pointer(stderr_fp)).unwrap();
-//! inv.call();
+//! inv.call().unwrap();
 //! ```
 //!
 //! ### Windows
@@ -134,16 +134,16 @@
 //! ```no_run
 //! use dyncall::{DynCaller, ArgVal};
 //!
-//! let iob = DynCaller::define_function_by_str("ucrtbase.dll|__acrt_iob_func|u32|ptr|").unwrap();
+//! let iob = DynCaller::define_function("ucrtbase.dll|__acrt_iob_func|u32|ptr|").unwrap();
 //! let mut inv = iob.prep();
 //! inv.push_arg(&2u32).unwrap(); // 2 = stderr
-//! let stderr_fp = *inv.call().as_pointer().unwrap();
+//! let stderr_fp = *inv.call().unwrap().as_pointer().unwrap();
 //!
-//! let fputs = DynCaller::define_function_by_str("ucrtbase.dll|fputs|cstr,ptr|i32|").unwrap();
+//! let fputs = DynCaller::define_function("ucrtbase.dll|fputs|cstr,ptr|i32|").unwrap();
 //! let mut inv = fputs.prep();
 //! inv.push_arg(&"hello from dyncall\n".to_string()).unwrap();
 //! inv.push_arg(&ArgVal::Pointer(stderr_fp)).unwrap();
-//! inv.call();
+//! inv.call().unwrap();
 //! ```
 //!
 //! Note: `ucrtbase.dll` does **not** export `printf`, `fprintf`, `sscanf`, or

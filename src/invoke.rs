@@ -34,8 +34,7 @@ fn read_errno() -> i32 {
 /// Obtained from [`FuncDef::prep`]. Arguments are pushed in declaration order
 /// with [`push_arg`](Invocation::push_arg) (input) or
 /// [`push_mut_arg`](Invocation::push_mut_arg) (output). Then the call is
-/// executed with [`call`](Invocation::call) or
-/// [`call_and_return`](Invocation::call_and_return).
+/// executed with [`call`](Invocation::call).
 ///
 /// After the call, the C `errno` value set by the foreign function is
 /// available via [`last_errno`](Invocation::last_errno). It is captured
@@ -54,12 +53,20 @@ impl<'a> Invocation<'a> {
     /// Push an input argument.
     ///
     /// Arguments must be pushed in the same order as declared in the [`FuncDef`].
-    /// Returns an error if the argument type does not match the declared type (strict mode)
+    /// Returns an error if more arguments are pushed than the function declares,
+    /// if the argument type does not match the declared type (strict mode),
     /// or if coercion fails (coerce mode).
     pub fn push_arg<T>(&mut self, value: &T) -> Result<()>
     where
         T: ToArg + ?Sized,
     {
+        if self.arg_ptrs.len() >= self.func_def.arg_types.len() {
+            bail!(
+                "too many arguments: function takes {}, already pushed {}",
+                self.func_def.arg_types.len(),
+                self.arg_ptrs.len()
+            );
+        }
         let val_count = self.arg_vals.len();
         let argp = value.to_arg(self)?;
         if self.arg_vals.len() - val_count != 2 {
@@ -72,12 +79,20 @@ impl<'a> Invocation<'a> {
     /// Push an output argument.
     ///
     /// The callee writes its result through a pointer to `value`. After
-    /// [`call`](Invocation::call) or [`call_and_return`](Invocation::call_and_return)
-    /// returns, `value` contains the result written by the callee.
+    /// [`call`](Invocation::call) returns, `value` contains the result written
+    /// by the callee. Returns an error if more arguments are pushed than the
+    /// function declares.
     pub fn push_mut_arg<T>(&mut self, value: &mut T) -> Result<()>
     where
         T: ToMutArg + ?Sized,
     {
+        if self.arg_ptrs.len() >= self.func_def.arg_types.len() {
+            bail!(
+                "too many arguments: function takes {}, already pushed {}",
+                self.func_def.arg_types.len(),
+                self.arg_ptrs.len()
+            );
+        }
         let val_count = self.arg_vals.len();
         let argp = value.to_mut_arg(self)?;
         if self.arg_vals.len() - val_count != 2 {
@@ -87,12 +102,21 @@ impl<'a> Invocation<'a> {
         Ok(())
     }
 
-    /// Returns the [`ArgType`] for the argument at `index`.
+    /// Returns the declared [`ArgType`] for the argument at `index`.
+    ///
+    /// Useful for scripting-language runtimes that need to inspect the expected
+    /// type before deciding which value to supply — for example, converting a
+    /// dynamic script value to the right Rust type before calling
+    /// [`push_arg`](Invocation::push_arg).
     pub fn get_arg_type(&self, index: usize) -> &ArgType {
         &self.func_def.arg_types[index]
     }
 
     /// Returns the number of declared arguments.
+    ///
+    /// Useful as an upper bound when iterating over caller-supplied values to
+    /// validate that the right number of arguments will be pushed before
+    /// calling [`call`](Invocation::call).
     pub fn get_arg_count(&self) -> usize {
         self.func_def.arg_types.len()
     }
@@ -101,60 +125,20 @@ impl<'a> Invocation<'a> {
     pub fn create_struct(&self, index: usize) -> anyhow::Result<StructValue> {
         self.func_def.create_struct(index)
     }
-    /// Execute the call, writing the return value into `return_ptr`.
-    ///
-    /// Use this when you want the return value placed into a pre-allocated
-    /// location (e.g. a local variable cast to `*mut c_void`), rather than
-    /// receiving it as an [`ArgVal`].
-    ///
-    /// # Safety
-    ///
-    /// `return_ptr` must point to memory large enough for the function's return
-    /// type and remain valid for the duration of the call.
-    pub fn call_and_return(&mut self, return_ptr: *mut c_void) {
-        let mut cif = self.func_def.cif;
-        self.pre_process_args();
-        // let result = match self.func_def.ffi_return_type.type_ as u32 {
-        //     FFI_TYPE_POINTER => ArgVal::Pointer(ptr::null_mut()),
-        //     FFI_TYPE_UINT64 => ArgVal::U64(0),
-        //     FFI_TYPE_SINT64 => ArgVal::I64(0),
-        //     FFI_TYPE_UINT32 => ArgVal::U32(0),
-        //     FFI_TYPE_SINT32 => ArgVal::I32(0),
-        //     FFI_TYPE_SINT16 => ArgVal::I16(0),
-        //     FFI_TYPE_UINT16 => ArgVal::U16(0),
-        //     FFI_TYPE_UINT8 => ArgVal::Char(0),
-        //     FFI_TYPE_SINT8 => ArgVal::Char(0),
-        //     FFI_TYPE_FLOAT => ArgVal::F32(0.0),
-        //     FFI_TYPE_DOUBLE => ArgVal::F64(0.0),
-        //     _ => panic!("Unsupported return type"),
-        // };
-
-        // let addr = result.payload_ptr();
-        log::trace!("call2 self={:?}", self.arg_ptrs);
-        unsafe {
-            ffi_call(
-                &mut cif,
-                Some(self.func_def.entry_point),
-                return_ptr, //as *mut c_void,
-                self.arg_ptrs.as_mut_ptr(),
-            );
-        }
-        self.last_errno = if self.func_def.capture_errno {
-            Some(read_errno())
-        } else {
-            None
-        };
-
-        self.post_process_args();
-        self.arg_ptrs.clear();
-        self.arg_vals.clear();
-    }
     /// Execute the call and return the result as an [`ArgVal`].
     ///
-    /// The variant of the returned [`ArgVal`] matches the return type declared
-    /// in the [`FuncDef`]. Use the `as_*` accessors generated by
+    /// Returns an error if fewer arguments have been pushed than the function
+    /// declares. The variant of the returned [`ArgVal`] matches the return type
+    /// declared in the [`FuncDef`]. Use the `as_*` accessors generated by
     /// [`EnumAsInner`](enum_as_inner) to extract the concrete value.
-    pub fn call(&mut self) -> ArgVal {
+    pub fn call(&mut self) -> Result<ArgVal> {
+        if self.arg_ptrs.len() < self.func_def.arg_types.len() {
+            bail!(
+                "too few arguments: expected {}, got {}",
+                self.func_def.arg_types.len(),
+                self.arg_ptrs.len()
+            );
+        }
         let mut cif = self.func_def.cif;
         self.pre_process_args();
         let result = match self.func_def.ffi_return_type.type_ as u32 {
@@ -195,7 +179,7 @@ impl<'a> Invocation<'a> {
         self.post_process_args();
         self.arg_ptrs.clear();
         self.arg_vals.clear();
-        result
+        Ok(result)
     }
 
     /// Returns the platform error code captured immediately after the last call,
@@ -223,7 +207,6 @@ impl<'a> Invocation<'a> {
     fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) {
         let len = match ldef {
             LengthDef::Arg(argnum) => {
-                // TODO get length from other arg
                 let len = match self.arg_vals.get((*argnum * 2 + 1) as usize) {
                     Some(ArgVal::U32(v)) => *v as usize,
                     Some(ArgVal::I32(v)) => *v as usize,
@@ -247,7 +230,6 @@ impl<'a> Invocation<'a> {
     fn pre_process_obytebuffer(&mut self, arg_idx: usize, ldef: &LengthDef) {
         let len = match ldef {
             LengthDef::Arg(argnum) => {
-                // TODO get length from other arg
                 let len = match self.arg_vals.get((*argnum * 2 + 1) as usize) {
                     Some(ArgVal::U32(v)) => *v as usize,
                     Some(ArgVal::I32(v)) => *v as usize,

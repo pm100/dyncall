@@ -57,10 +57,19 @@ impl FuncDef {
         }
     }
     /// Returns the number of declared arguments.
+    ///
+    /// Useful as an upper bound when iterating over caller-supplied values to
+    /// validate that the right number of arguments will be pushed before
+    /// calling [`Invocation::call`].
     pub fn get_arg_count(&self) -> usize {
         self.arg_types.len()
     }
-    /// Returns the [`ArgType`] for the argument at `index`.
+    /// Returns the declared [`ArgType`] for the argument at `index`.
+    ///
+    /// Useful for scripting-language runtimes that need to inspect the expected
+    /// type before deciding which value to supply — for example, converting a
+    /// dynamic script value to the right Rust type before calling
+    /// [`Invocation::push_arg`].
     pub fn get_arg_type(&self, index: usize) -> &ArgType {
         &self.arg_types[index]
     }
@@ -176,7 +185,6 @@ impl DynCaller {
         let lib = DynamicLibrary::open(Some(Path::new(lib_name)))?;
 
         self.libs.insert(lib_name.to_string(), lib);
-        // // return Ok(lib);
         Ok(self.libs.get(lib_name).unwrap().clone())
     }
 
@@ -211,11 +219,11 @@ impl DynCaller {
     /// ```no_run
     /// use dyncall::DynCaller;
     /// // printf(const char *fmt, ...) → int
-    /// let def = DynCaller::define_function_by_str(
+    /// let def = DynCaller::define_function(
     ///     "msvcrt.dll|printf|cstr,i32|i32|fixargs=1"
     /// ).unwrap();
     /// ```
-    pub fn define_function_by_str(funcdef: &str) -> Result<FuncDef> {
+    pub fn define_function(funcdef: &str) -> Result<FuncDef> {
         let funcdef = funcdef.split("|").collect::<Vec<&str>>();
         if funcdef.len() != 5 {
             bail!("Invalid function definition format. Expected 'lib_name|entry_point_name|arg1,arg2,arg3|return_type|flags'");

@@ -1,5 +1,4 @@
 mod test {
-    use std::ffi::c_void;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -60,32 +59,30 @@ mod test {
 
     #[test]
     fn test_atoi() {
-        let atoidef = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let atoidef = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
         let mut atoi = atoidef.prep();
         let str = "12345".to_string();
         atoi.push_arg(&str).unwrap();
-        let mut ret: i32 = 0;
-        let retp = &raw mut ret;
-        atoi.call_and_return(retp as *mut c_void);
-        println!("atoi ret={:?}", ret);
-        assert_eq!(ret, 12345);
+        let ret = atoi.call().unwrap();
+        println!("atoi ret={:?}", ret.as_i32().unwrap());
+        assert_eq!(*ret.as_i32().unwrap(), 12345);
     }
     #[test]
     fn test_atoi_simple() {
-        let atoidef = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let atoidef = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
         let mut atoi = atoidef.prep();
         let str = "12345".to_string();
         atoi.push_arg(&str).unwrap();
-        let ret = atoi.call();
+        let ret = atoi.call().unwrap();
         println!("atoi ret={:?}", ret.as_i32().unwrap());
         assert_eq!(*ret.as_i32().unwrap(), 12345);
     }
     #[test]
     fn test_fread() {
         let fopen_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|u64|")).unwrap();
+            DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|u64|")).unwrap();
         let fread_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fread|i32,i32,obuff=arg1,ptr|i32|"))
+            DynCaller::define_function(&format!("{LIBC}|fread|i32,i32,obuff=arg1,ptr|i32|"))
                 .unwrap();
         let mut fopen = fopen_def.prep();
         let mut fread = fread_def.prep();
@@ -93,14 +90,14 @@ mod test {
         let mode = "r".to_string();
         fopen.push_arg(&name).unwrap();
         fopen.push_arg(&mode).unwrap();
-        let ret = fopen.call();
+        let ret = fopen.call().unwrap();
         println!("fopen ret={:x}", ret.as_u64().unwrap());
         let mut buffer: String = String::with_capacity(100);
         fread.push_arg(&(1i32)).unwrap();
         fread.push_arg(&(50i32)).unwrap();
         fread.push_mut_arg(&mut buffer).unwrap();
         fread.push_arg(&ret).unwrap();
-        let ret2 = fread.call();
+        let ret2 = fread.call().unwrap();
         println!("fgets  ret={:?}", ret2.as_i32().unwrap());
         let rlen = ret2.as_i32().unwrap();
         unsafe {
@@ -112,9 +109,9 @@ mod test {
     #[test]
     fn test_fgets() {
         let fopen_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|u64|")).unwrap();
+            DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|u64|")).unwrap();
         let fgets_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fgets|ocstr=arg1,i32,ptr|i32|"))
+            DynCaller::define_function(&format!("{LIBC}|fgets|ocstr=arg1,i32,ptr|i32|"))
                 .unwrap();
         let mut fopen = fopen_def.prep();
         let mut fgets = fgets_def.prep();
@@ -122,20 +119,20 @@ mod test {
         let mode = "r".to_string();
         fopen.push_arg(&name).unwrap();
         fopen.push_arg(&mode).unwrap();
-        let ret = fopen.call();
+        let ret = fopen.call().unwrap();
         println!("fopen ret={:x}", ret.as_u64().unwrap());
         let mut buffer: String = String::with_capacity(100);
         fgets.push_mut_arg(&mut buffer).unwrap();
         fgets.push_arg(&(50i32)).unwrap();
         fgets.push_arg(&ret).unwrap();
-        let ret2 = fgets.call();
+        let ret2 = fgets.call().unwrap();
         println!("fgets  ret={:?}", ret2.as_i32().unwrap());
         println!("buffer read: {}", buffer);
     }
 
     #[test]
     fn test_printf() {
-        let printf_def = DynCaller::define_function_by_str(&format!(
+        let printf_def = DynCaller::define_function(&format!(
             "{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1"
         ))
         .unwrap();
@@ -146,14 +143,14 @@ mod test {
         printf.push_arg(&format).unwrap();
         printf.push_arg(&name).unwrap();
         printf.push_arg(&age).unwrap();
-        let ret = printf.call();
+        let ret = printf.call().unwrap();
         println!("printf ret={:?}", ret.as_i32().unwrap());
     }
 
     #[test]
     fn test_scanf() {
         let instr = "hello world 42\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,ocstr=50|i32|fixargs=2"
         ))
         .unwrap();
@@ -163,14 +160,14 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
     }
 
     #[test]
     fn test_scanf_num_i32() {
         let instr = "42\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*i32|i32|fixargs=2"
         ))
         .unwrap();
@@ -180,7 +177,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 42);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -189,7 +186,7 @@ mod test {
     #[test]
     fn test_scanf_num_u32() {
         let instr = "4294967295\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*u32|i32|fixargs=2"
         ))
         .unwrap();
@@ -199,7 +196,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 4_294_967_295);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -208,7 +205,7 @@ mod test {
     #[test]
     fn test_scanf_num_u64() {
         let instr = "18446744073709551615\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*u64|i32|fixargs=2"
         ))
         .unwrap();
@@ -218,7 +215,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 18_446_744_073_709_551_615);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -227,7 +224,7 @@ mod test {
     #[test]
     fn test_scanf_num_i64() {
         let instr = "-9223372036854775808\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*i64|i32|fixargs=2"
         ))
         .unwrap();
@@ -237,7 +234,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, -9_223_372_036_854_775_808);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -246,7 +243,7 @@ mod test {
     #[test]
     fn test_scanf_num_f32() {
         let instr = "3.14\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*f32|i32|fixargs=2"
         ))
         .unwrap();
@@ -256,7 +253,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert!((ans - 3.14f32).abs() < 1e-4);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -265,7 +262,7 @@ mod test {
     #[test]
     fn test_scanf_num_i16() {
         let instr = "32767\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*i16|i32|fixargs=2"
         ))
         .unwrap();
@@ -275,7 +272,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 32767i16);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -284,7 +281,7 @@ mod test {
     #[test]
     fn test_scanf_num_u16() {
         let instr = "65535\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*u16|i32|fixargs=2"
         ))
         .unwrap();
@@ -294,7 +291,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 65535u16);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -303,7 +300,7 @@ mod test {
     #[test]
     fn test_scanf_num_i8() {
         let instr = "127\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*i8|i32|fixargs=2"
         ))
         .unwrap();
@@ -313,7 +310,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 127i8);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -322,7 +319,7 @@ mod test {
     #[test]
     fn test_scanf_num_u8() {
         let instr = "255\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*u8|i32|fixargs=2"
         ))
         .unwrap();
@@ -332,7 +329,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert_eq!(ans, 255u8);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -341,7 +338,7 @@ mod test {
     #[test]
     fn test_scanf_num_f64() {
         let instr = "3.14159\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*f64|i32|fixargs=2"
         ))
         .unwrap();
@@ -351,7 +348,7 @@ mod test {
         sscanf.push_arg(&instr).unwrap();
         sscanf.push_arg(&format).unwrap();
         sscanf.push_mut_arg(&mut ans).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
         assert!((ans - 3.14159).abs() < 1e-9);
         assert_eq!(*ret.as_i32().unwrap(), 1);
@@ -361,7 +358,7 @@ mod test {
     fn test_scanf_string_and_numbers() {
         let instr =
             "hello 42 4294967295 18446744073709551615 -9223372036854775808 3.14159\n".to_string();
-        let sscanf_def = DynCaller::define_function_by_str(&format!(
+        let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,ocstr=50,*i32,*u32,*u64,*i64,*f64|i32|fixargs=2"
         ))
         .unwrap();
@@ -381,7 +378,7 @@ mod test {
         sscanf.push_mut_arg(&mut u64v).unwrap();
         sscanf.push_mut_arg(&mut i64v).unwrap();
         sscanf.push_mut_arg(&mut f64v).unwrap();
-        let ret = sscanf.call();
+        let ret = sscanf.call().unwrap();
         println!(
             "sscanf ret={:?} out={} i32={} u32={} u64={} i64={} f64={}",
             ret.as_i32().unwrap(),
@@ -405,13 +402,13 @@ mod test {
     fn test_struct_by_value() {
         let lib = struct_fixture_path();
         let def =
-            DynCaller::define_function_by_str(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+            DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
         let mut inv = def.prep();
         let mut pair = inv.create_struct(0).unwrap();
         pair.push_field(&10u32).unwrap();
         pair.push_field(&32u32).unwrap();
         inv.push_arg(&pair).unwrap();
-        let ret = inv.call();
+        let ret = inv.call().unwrap();
         assert_eq!(*ret.as_u32().unwrap(), 42);
     }
 
@@ -419,28 +416,28 @@ mod test {
     fn test_struct_pointer_input() {
         let lib = struct_fixture_path();
         let def =
-            DynCaller::define_function_by_str(&format!("{lib}|sum_pair_ptr|*{{u32,u32}}|u32|"))
+            DynCaller::define_function(&format!("{lib}|sum_pair_ptr|*{{u32,u32}}|u32|"))
                 .unwrap();
         let mut inv = def.prep();
         let mut pair = def.create_struct(0).unwrap();
         pair.push_field(&11u32).unwrap();
         pair.push_field(&31u32).unwrap();
         inv.push_mut_arg(&mut pair).unwrap();
-        let ret = inv.call();
+        let ret = inv.call().unwrap();
         assert_eq!(*ret.as_u32().unwrap(), 42);
     }
 
     #[test]
     fn test_struct_pointer_mutation() {
         let lib = struct_fixture_path();
-        let def = DynCaller::define_function_by_str(&format!("{lib}|bump_pair|*{{u32,u32}}|u32|"))
+        let def = DynCaller::define_function(&format!("{lib}|bump_pair|*{{u32,u32}}|u32|"))
             .unwrap();
         let mut inv = def.prep();
         let mut pair = def.create_struct(0).unwrap();
         pair.push_field(&7u32).unwrap();
         pair.push_field(&8u32).unwrap();
         inv.push_mut_arg(&mut pair).unwrap();
-        let ret = inv.call();
+        let ret = inv.call().unwrap();
         assert_eq!(*ret.as_u32().unwrap(), 18);
         assert_eq!(pair.read_field::<u32>(0).unwrap(), 8);
         assert_eq!(pair.read_field::<u32>(1).unwrap(), 10);
@@ -457,8 +454,8 @@ mod test {
         #[cfg(not(target_os = "windows"))]
         let tm_desc = "{i32,i32,i32,i32,i32,i32,i32,i32,i32,i64,i64}";
         let mktime_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|mktime|*{tm_desc}|i64|")).unwrap();
-        let strftime_def = DynCaller::define_function_by_str(&format!(
+            DynCaller::define_function(&format!("{LIBC}|mktime|*{tm_desc}|i64|")).unwrap();
+        let strftime_def = DynCaller::define_function(&format!(
             "{LIBC}|strftime|ocstr=arg1,u64,cstr,*{tm_desc}|u64|"
         ))
         .unwrap();
@@ -476,7 +473,7 @@ mod test {
 
         let mut mktime = mktime_def.prep();
         mktime.push_mut_arg(&mut tm).unwrap();
-        let mktime_ret = mktime.call();
+        let mktime_ret = mktime.call().unwrap();
         assert_ne!(*mktime_ret.as_i64().unwrap(), -1);
 
         let format = "%Y-%m-%d %H:%M:%S".to_string();
@@ -486,7 +483,7 @@ mod test {
         strftime.push_arg(&64u64).unwrap();
         strftime.push_arg(&format).unwrap();
         strftime.push_mut_arg(&mut tm).unwrap();
-        let strftime_ret = strftime.call();
+        let strftime_ret = strftime.call().unwrap();
 
         assert_eq!(*strftime_ret.as_u64().unwrap(), 19);
         assert_eq!(output, "2024-01-02 03:04:05");
@@ -498,54 +495,54 @@ mod test {
 
     #[test]
     fn test_coerce_i64_into_i32_strict_errors() {
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
         let mut inv = def.prep();
         assert!(inv.push_arg(&100i64).is_err());
     }
 
     #[test]
     fn test_coerce_i64_into_i32_with_coerce() {
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&(-42i64)).unwrap();
-        let result = inv.call();
+        let result = inv.call().unwrap();
         assert_eq!(*result.as_i32().unwrap(), 42);
     }
 
     #[test]
     fn test_coerce_string_into_cstr_slot() {
         // String → cstr slot: works in both strict and coerce mode
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|coerce")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|coerce")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&"42".to_string()).unwrap();
-        let result = inv.call();
+        let result = inv.call().unwrap();
         assert_eq!(*result.as_i32().unwrap(), 42);
     }
 
     #[test]
     fn test_coerce_int_into_cstr_slot() {
         // int → cstr: format as decimal
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|coerce")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|coerce")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&42i32).unwrap();
-        let result = inv.call();
+        let result = inv.call().unwrap();
         assert_eq!(*result.as_i32().unwrap(), 42);
     }
 
     #[test]
     fn test_coerce_string_into_int_slot() {
         // str → int: parse "42" → 42
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&"42".to_string()).unwrap();
-        let result = inv.call();
+        let result = inv.call().unwrap();
         assert_eq!(*result.as_i32().unwrap(), 42);
     }
 
     #[test]
     fn test_coerce_invalid_string_into_int_slot_errors() {
         // str → int parse failure: should error
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
         let mut inv = def.prep();
         assert!(inv.push_arg(&"hello".to_string()).is_err());
     }
@@ -553,7 +550,7 @@ mod test {
     #[test]
     fn test_coerce_strict_type_mismatch_errors() {
         // Without coerce: i64 for i32 slot → Err
-        let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
         let mut inv = def.prep();
         assert!(inv.push_arg(&42i64).is_err());
     }
@@ -561,7 +558,7 @@ mod test {
     #[test]
     fn test_coerce_multiple_flags() {
         // fixargs=1,coerce together
-        let def = DynCaller::define_function_by_str(&format!(
+        let def = DynCaller::define_function(&format!(
             "{LIBC}|printf|cstr,i32|i32|fixargs=1,coerce"
         ))
         .unwrap();
@@ -569,7 +566,7 @@ mod test {
         let mut inv = def.prep();
         inv.push_arg(&"value: %d\n".to_string()).unwrap();
         inv.push_arg(&99i64).unwrap(); // i64 coerced to declared i32
-        let ret = inv.call();
+        let ret = inv.call().unwrap();
         assert!(*ret.as_i32().unwrap() > 0);
     }
 
@@ -585,16 +582,16 @@ mod test {
 
         // fopen(path, "r") -> FILE*
         let fopen_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
+            DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
         let mut inv = fopen_def.prep();
         inv.push_arg(&path_str).unwrap();
         inv.push_arg(&"r".to_string()).unwrap();
-        let file_val = inv.call();
+        let file_val = inv.call().unwrap();
         let fp: *mut c_void = *file_val.as_pointer().unwrap();
         assert!(!fp.is_null(), "fopen failed");
 
         // fgets(buf, 64, fp) -> ptr
-        let fgets_def = DynCaller::define_function_by_str(&format!(
+        let fgets_def = DynCaller::define_function(&format!(
             "{LIBC}|fgets|ocstr=arg1,i32,ptr|ptr|"
         ))
         .unwrap();
@@ -603,7 +600,7 @@ mod test {
         inv.push_mut_arg(&mut buf).unwrap();
         inv.push_arg(&64i32).unwrap();
         inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-        let ret = inv.call();
+        let ret = inv.call().unwrap();
         assert!(
             !(*ret.as_pointer().unwrap()).is_null(),
             "fgets returned NULL"
@@ -612,10 +609,10 @@ mod test {
 
         // fclose(fp)
         let fclose_def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
+            DynCaller::define_function(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
         let mut inv = fclose_def.prep();
         inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-        inv.call();
+        inv.call().unwrap();
 
         let _ = std::fs::remove_file(&path);
     }
@@ -630,44 +627,44 @@ mod test {
         {
             const UCRT: &str = "ucrtbase.dll";
             let iob_def =
-                DynCaller::define_function_by_str(&format!("{UCRT}|__acrt_iob_func|u32|ptr|"))
+                DynCaller::define_function(&format!("{UCRT}|__acrt_iob_func|u32|ptr|"))
                     .unwrap();
             let mut inv = iob_def.prep();
             inv.push_arg(&2u32).unwrap(); // 2 = stderr
-            let fp = *inv.call().as_pointer().unwrap();
+            let fp = *inv.call().unwrap().as_pointer().unwrap();
             assert!(!fp.is_null(), "__acrt_iob_func(2) returned NULL");
 
             let fputs_def =
-                DynCaller::define_function_by_str(&format!("{UCRT}|fputs|cstr,ptr|i32|")).unwrap();
+                DynCaller::define_function(&format!("{UCRT}|fputs|cstr,ptr|i32|")).unwrap();
             let mut inv = fputs_def.prep();
             inv.push_arg(&"[dyncall stderr test]\n".to_string()).unwrap();
             inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-            assert!(*inv.call().as_i32().unwrap() >= 0);
+            assert!(*inv.call().unwrap().as_i32().unwrap() >= 0);
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let fopen_def =
-                DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|"))
+                DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|"))
                     .unwrap();
             let mut inv = fopen_def.prep();
             inv.push_arg(&"/dev/stderr".to_string()).unwrap();
             inv.push_arg(&"w".to_string()).unwrap();
-            let fp = *inv.call().as_pointer().unwrap();
+            let fp = *inv.call().unwrap().as_pointer().unwrap();
             assert!(!fp.is_null(), "fopen(/dev/stderr) returned NULL");
 
             let fputs_def =
-                DynCaller::define_function_by_str(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
+                DynCaller::define_function(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
             let mut inv = fputs_def.prep();
             inv.push_arg(&"[dyncall stderr test]\n".to_string()).unwrap();
             inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-            assert!(*inv.call().as_i32().unwrap() >= 0);
+            assert!(*inv.call().unwrap().as_i32().unwrap() >= 0);
 
             let fclose_def =
-                DynCaller::define_function_by_str(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
+                DynCaller::define_function(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
             let mut inv = fclose_def.prep();
             inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-            inv.call();
+            inv.call().unwrap();
         }
     }
 
@@ -680,42 +677,42 @@ mod test {
         {
             const UCRT: &str = "ucrtbase.dll";
             let iob_def =
-                DynCaller::define_function_by_str(&format!("{UCRT}|__acrt_iob_func|u32|ptr|"))
+                DynCaller::define_function(&format!("{UCRT}|__acrt_iob_func|u32|ptr|"))
                     .unwrap();
             let mut inv = iob_def.prep();
             inv.push_arg(&1u32).unwrap(); // 1 = stdout
-            let fp = *inv.call().as_pointer().unwrap();
+            let fp = *inv.call().unwrap().as_pointer().unwrap();
             assert!(!fp.is_null(), "__acrt_iob_func(1) returned NULL");
 
             let fflush_def =
-                DynCaller::define_function_by_str(&format!("{UCRT}|fflush|ptr|i32|")).unwrap();
+                DynCaller::define_function(&format!("{UCRT}|fflush|ptr|i32|")).unwrap();
             let mut inv = fflush_def.prep();
             inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-            assert_eq!(*inv.call().as_i32().unwrap(), 0);
+            assert_eq!(*inv.call().unwrap().as_i32().unwrap(), 0);
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let fopen_def =
-                DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|"))
+                DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|"))
                     .unwrap();
             let mut inv = fopen_def.prep();
             inv.push_arg(&"/dev/stdout".to_string()).unwrap();
             inv.push_arg(&"w".to_string()).unwrap();
-            let fp = *inv.call().as_pointer().unwrap();
+            let fp = *inv.call().unwrap().as_pointer().unwrap();
             assert!(!fp.is_null(), "fopen(/dev/stdout) returned NULL");
 
             let fflush_def =
-                DynCaller::define_function_by_str(&format!("{LIBC}|fflush|ptr|i32|")).unwrap();
+                DynCaller::define_function(&format!("{LIBC}|fflush|ptr|i32|")).unwrap();
             let mut inv = fflush_def.prep();
             inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-            assert_eq!(*inv.call().as_i32().unwrap(), 0);
+            assert_eq!(*inv.call().unwrap().as_i32().unwrap(), 0);
 
             let fclose_def =
-                DynCaller::define_function_by_str(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
+                DynCaller::define_function(&format!("{LIBC}|fclose|ptr|i32|")).unwrap();
             let mut inv = fclose_def.prep();
             inv.push_arg(&ArgVal::Pointer(fp)).unwrap();
-            inv.call();
+            inv.call().unwrap();
         }
     }
 
@@ -724,12 +721,12 @@ mod test {
         // fopen a non-existent file with errno flag; the call should fail (NULL)
         // and errno should be non-zero (ENOENT = 2 on most platforms).
         let def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
+            DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&"/this/path/does/not/exist/dyncall_test".to_string())
             .unwrap();
         inv.push_arg(&"r".to_string()).unwrap();
-        let result = inv.call();
+        let result = inv.call().unwrap();
         let errno = inv.last_errno().expect("errno flag set but last_errno() returned None");
         assert!(
             result.as_pointer().map(|p| p.is_null()).unwrap_or(true),
@@ -742,11 +739,31 @@ mod test {
     fn test_errno_not_captured_without_flag() {
         // Without the errno flag, last_errno() should return None.
         let def =
-            DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+            DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&(-5i32)).unwrap();
-        let result = inv.call();
+        let result = inv.call().unwrap();
         assert_eq!(*result.as_i32().unwrap(), 5);
         assert_eq!(inv.last_errno(), None, "expected None when errno flag not set");
+    }
+
+    #[test]
+    fn test_push_too_many_args_errors() {
+        // Pushing more args than declared must return Err.
+        let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"42".to_string()).unwrap();
+        let extra = inv.push_arg(&"extra".to_string());
+        assert!(extra.is_err(), "pushing past declared arg count should fail");
+    }
+
+    #[test]
+    fn test_call_too_few_args_errors() {
+        // Calling with fewer args than declared must return Err.
+        let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let mut inv = def.prep();
+        // Push no arguments — one is expected.
+        let result = inv.call();
+        assert!(result.is_err(), "calling with too few args should fail");
     }
 }
