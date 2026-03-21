@@ -120,6 +120,31 @@ impl<'a> Invocation<'a> {
         self.func_def.arg_types.len()
     }
 
+    /// Push the next argument, coercing `value` from `f64` to the declared type.
+    ///
+    /// Useful for language runtimes that represent all numbers as `f64`
+    /// (e.g. BASIC, Lox).  The declared type drives the conversion — integers
+    /// are truncated via `as` cast, floats are narrowed.
+    pub fn push_arg_f64(&mut self, value: f64) -> Result<()> {
+        self.check_arg_count()?;
+        let declared = self.func_def.arg_types[self.arg_ptrs.len()].clone();
+        let val_count = self.arg_vals.len();
+        let argp = crate::coerce::push_coerced_float(self, value, &declared)?;
+        self.finish_push(argp, val_count)
+    }
+
+    /// Push the next argument, coercing `value` from `i64` to the declared type.
+    ///
+    /// Useful for language runtimes that represent all numbers as `i64`
+    /// (e.g. Forth).  The declared type drives the conversion.
+    pub fn push_arg_i64(&mut self, value: i64) -> Result<()> {
+        self.check_arg_count()?;
+        let declared = self.func_def.arg_types[self.arg_ptrs.len()].clone();
+        let val_count = self.arg_vals.len();
+        let argp = crate::coerce::push_coerced_int(self, value, &declared)?;
+        self.finish_push(argp, val_count)
+    }
+
     /// Create an empty [`StructValue`] for the declared argument at `index`.
     pub fn create_struct(&self, index: usize) -> anyhow::Result<StructValue> {
         self.func_def.create_struct(index)

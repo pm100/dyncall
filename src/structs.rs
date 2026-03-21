@@ -33,6 +33,19 @@ pub trait FromStructField: Sized {
     fn read_field(expected: &ArgType, src: &[u8]) -> Result<Self>;
 }
 
+/// Coerced read: converts any numeric field to `Self` regardless of the
+/// declared field type. Useful for language runtimes that use a single
+/// numeric representation (e.g. `f64` for BASIC/Lox, `i64` for Forth).
+pub trait CoerceFromField: Sized {
+    fn coerce_from_field(src_type: &ArgType, src: &[u8]) -> Result<Self>;
+}
+
+/// Coerced write: writes `self` into a field slot of any numeric type,
+/// converting via `as` cast. Useful as the mirror of [`CoerceFromField`].
+pub trait CoerceIntoField {
+    fn coerce_into_field(&self, dst_type: &ArgType, dst: &mut [u8]) -> Result<()>;
+}
+
 impl StructType {
     pub fn new(field_types: Vec<ArgType>) -> Result<Self> {
         if field_types.is_empty() {
@@ -126,6 +139,38 @@ impl StructValue {
         let start = field.offset;
         let end = field.offset + field.size;
         T::read_field(&field.arg_type, &self.bytes[start..end])
+    }
+
+    /// Read field `index`, converting from whatever numeric type it was
+    /// declared as to `T`. Avoids needing to know the exact declared type.
+    pub fn read_field_coerced<T>(&self, index: usize) -> Result<T>
+    where
+        T: CoerceFromField,
+    {
+        let field = self
+            .layout
+            .field(index)
+            .ok_or_else(|| anyhow::anyhow!("Struct field index {} is out of range", index))?;
+        let start = field.offset;
+        let end = field.offset + field.size;
+        T::coerce_from_field(&field.arg_type, &self.bytes[start..end])
+    }
+
+    /// Push the next field, coercing `value` to the declared field type.
+    /// Useful for runtimes that store all numbers as a single type (e.g. `f64`).
+    pub fn push_field_coerced<T>(&mut self, value: &T) -> Result<()>
+    where
+        T: CoerceIntoField,
+    {
+        let field = self
+            .layout
+            .field(self.next_field)
+            .ok_or_else(|| anyhow::anyhow!("All struct fields are already populated"))?;
+        let start = field.offset;
+        let end = field.offset + field.size;
+        value.coerce_into_field(&field.arg_type, &mut self.bytes[start..end])?;
+        self.next_field += 1;
+        Ok(())
     }
 
     pub fn field_count(&self) -> usize {
@@ -275,3 +320,110 @@ impl FromStructField for i8 {
         }
     }
 }
+
+// ── Coerced field read/write ──────────────────────────────────────────────────
+
+/// Read any numeric field from raw bytes as an `i64`, widening or reinterpreting
+/// as necessary. Used by [`StructValue::read_field_coerced`].
+fn read_any_numeric_as_i64(src_type: &ArgType, src: &[u8]) -> Result<i64> {
+    Ok(match src_type {
+        ArgType::Char => src[0] as i8 as i64,
+        ArgType::I16  => i16::from_ne_bytes(src[..2].try_into().unwrap()) as i64,
+        ArgType::U16  => u16::from_ne_bytes(src[..2].try_into().unwrap()) as i64,
+        ArgType::I32  => i32::from_ne_bytes(src[..4].try_into().unwrap()) as i64,
+        ArgType::U32  => u32::from_ne_bytes(src[..4].try_into().unwrap()) as i64,
+        ArgType::I64  => i64::from_ne_bytes(src[..8].try_into().unwrap()),
+        ArgType::U64  => u64::from_ne_bytes(src[..8].try_into().unwrap()) as i64,
+        ArgType::F32  => f32::from_ne_bytes(src[..4].try_into().unwrap()) as i64,
+        ArgType::F64  => f64::from_ne_bytes(src[..8].try_into().unwrap()) as i64,
+        _ => bail!("read_field_coerced: unsupported field type {:?}", src_type),
+    })
+}
+
+/// Write an `i64` into a field of any numeric type, truncating/converting as needed.
+fn write_i64_into_any_numeric(value: i64, dst_type: &ArgType, dst: &mut [u8]) -> Result<()> {
+    match dst_type {
+        ArgType::Char => dst[0] = value as u8,
+        ArgType::I16  => dst[..2].copy_from_slice(&(value as i16).to_ne_bytes()),
+        ArgType::U16  => dst[..2].copy_from_slice(&(value as u16).to_ne_bytes()),
+        ArgType::I32  => dst[..4].copy_from_slice(&(value as i32).to_ne_bytes()),
+        ArgType::U32  => dst[..4].copy_from_slice(&(value as u32).to_ne_bytes()),
+        ArgType::I64  => dst[..8].copy_from_slice(&value.to_ne_bytes()),
+        ArgType::U64  => dst[..8].copy_from_slice(&(value as u64).to_ne_bytes()),
+        ArgType::F32  => dst[..4].copy_from_slice(&(value as f32).to_ne_bytes()),
+        ArgType::F64  => dst[..8].copy_from_slice(&(value as f64).to_ne_bytes()),
+        _ => bail!("push_field_coerced: unsupported field type {:?}", dst_type),
+    }
+    Ok(())
+}
+
+/// Implements [`CoerceFromField`] for a numeric type, routing through `i64` as
+/// the common intermediate representation.
+macro_rules! impl_coerce_from_field {
+    ($ty:ty) => {
+        impl CoerceFromField for $ty {
+            fn coerce_from_field(src_type: &ArgType, src: &[u8]) -> Result<Self> {
+                Ok(read_any_numeric_as_i64(src_type, src)? as $ty)
+            }
+        }
+    };
+}
+
+/// Implements [`CoerceIntoField`] for a numeric type, routing through `i64`.
+macro_rules! impl_coerce_into_field {
+    ($ty:ty) => {
+        impl CoerceIntoField for $ty {
+            fn coerce_into_field(&self, dst_type: &ArgType, dst: &mut [u8]) -> Result<()> {
+                write_i64_into_any_numeric(*self as i64, dst_type, dst)
+            }
+        }
+    };
+}
+
+// f64 gets special treatment to avoid precision loss on the read path.
+impl CoerceFromField for f64 {
+    fn coerce_from_field(src_type: &ArgType, src: &[u8]) -> Result<Self> {
+        Ok(match src_type {
+            ArgType::Char => src[0] as i8 as f64,
+            ArgType::I16  => i16::from_ne_bytes(src[..2].try_into().unwrap()) as f64,
+            ArgType::U16  => u16::from_ne_bytes(src[..2].try_into().unwrap()) as f64,
+            ArgType::I32  => i32::from_ne_bytes(src[..4].try_into().unwrap()) as f64,
+            ArgType::U32  => u32::from_ne_bytes(src[..4].try_into().unwrap()) as f64,
+            ArgType::I64  => i64::from_ne_bytes(src[..8].try_into().unwrap()) as f64,
+            ArgType::U64  => u64::from_ne_bytes(src[..8].try_into().unwrap()) as f64,
+            ArgType::F32  => f32::from_ne_bytes(src[..4].try_into().unwrap()) as f64,
+            ArgType::F64  => f64::from_ne_bytes(src[..8].try_into().unwrap()),
+            _ => bail!("read_field_coerced: unsupported field type {:?}", src_type),
+        })
+    }
+}
+
+impl CoerceIntoField for f64 {
+    fn coerce_into_field(&self, dst_type: &ArgType, dst: &mut [u8]) -> Result<()> {
+        match dst_type {
+            ArgType::F64 => { dst[..8].copy_from_slice(&self.to_ne_bytes()); Ok(()) }
+            ArgType::F32 => { dst[..4].copy_from_slice(&(*self as f32).to_ne_bytes()); Ok(()) }
+            _ => write_i64_into_any_numeric(*self as i64, dst_type, dst),
+        }
+    }
+}
+
+impl_coerce_from_field!(i8);
+impl_coerce_from_field!(u8);
+impl_coerce_from_field!(i16);
+impl_coerce_from_field!(u16);
+impl_coerce_from_field!(i32);
+impl_coerce_from_field!(u32);
+impl_coerce_from_field!(i64);
+impl_coerce_from_field!(u64);
+impl_coerce_from_field!(f32);
+
+impl_coerce_into_field!(i8);
+impl_coerce_into_field!(u8);
+impl_coerce_into_field!(i16);
+impl_coerce_into_field!(u16);
+impl_coerce_into_field!(i32);
+impl_coerce_into_field!(u32);
+impl_coerce_into_field!(i64);
+impl_coerce_into_field!(u64);
+impl_coerce_into_field!(f32);

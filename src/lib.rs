@@ -164,6 +164,8 @@ pub use args::LengthDef;
 pub use caller::DynCaller;
 pub use caller::FuncDef;
 pub use invoke::Invocation;
+pub use structs::CoerceFromField;
+pub use structs::CoerceIntoField;
 pub use structs::FromStructField;
 pub use structs::StructType;
 pub use structs::StructValue;

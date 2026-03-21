@@ -766,4 +766,181 @@ mod test {
         let result = inv.call();
         assert!(result.is_err(), "calling with too few args should fail");
     }
+
+    // ── CoerceFromField / CoerceIntoField tests ───────────────────────────────
+
+    #[test]
+    fn test_coerce_read_field_exact_types() {
+        use crate::structs::StructType;
+        use crate::{ArgType, StructValue};
+        let st = StructType::new(vec![ArgType::I32, ArgType::F64, ArgType::U16]).unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field(&42i32).unwrap();
+        sv.push_field(&3.14f64).unwrap();
+        sv.push_field(&7u16).unwrap();
+
+        // f64 coerced read — no loss for these values
+        assert_eq!(sv.read_field_coerced::<f64>(0).unwrap(), 42.0);
+        assert!((sv.read_field_coerced::<f64>(1).unwrap() - 3.14).abs() < 1e-9);
+        assert_eq!(sv.read_field_coerced::<f64>(2).unwrap(), 7.0);
+
+        // i64 coerced read
+        assert_eq!(sv.read_field_coerced::<i64>(0).unwrap(), 42);
+        assert_eq!(sv.read_field_coerced::<i64>(2).unwrap(), 7);
+    }
+
+    #[test]
+    fn test_coerce_read_all_numeric_types_as_f64() {
+        use crate::structs::StructType;
+        use crate::{ArgType, StructValue};
+        let st = StructType::new(vec![
+            ArgType::Char, ArgType::I16, ArgType::U16,
+            ArgType::I32,  ArgType::U32,
+            ArgType::I64,  ArgType::U64,
+            ArgType::F32,  ArgType::F64,
+        ]).unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field(&1u8).unwrap();
+        sv.push_field(&2i16).unwrap();
+        sv.push_field(&3u16).unwrap();
+        sv.push_field(&4i32).unwrap();
+        sv.push_field(&5u32).unwrap();
+        sv.push_field(&6i64).unwrap();
+        sv.push_field(&7u64).unwrap();
+        sv.push_field(&8.0f32).unwrap();
+        sv.push_field(&9.0f64).unwrap();
+
+        for (i, expected) in (1u32..=9).enumerate() {
+            assert_eq!(sv.read_field_coerced::<f64>(i).unwrap(), expected as f64,
+                "field {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn test_coerce_write_field_i64_into_i32() {
+        use crate::structs::StructType;
+        use crate::{ArgType, StructValue};
+        let st = StructType::new(vec![ArgType::I32]).unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field_coerced(&100i64).unwrap();
+        assert_eq!(sv.read_field::<i32>(0).unwrap(), 100);
+    }
+
+    #[test]
+    fn test_coerce_write_field_f64_into_i32() {
+        use crate::structs::StructType;
+        use crate::{ArgType, StructValue};
+        let st = StructType::new(vec![ArgType::I32, ArgType::F32]).unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field_coerced(&-7.9f64).unwrap();  // truncates to -7
+        sv.push_field_coerced(&1.5f64).unwrap();   // stays as f32
+        assert_eq!(sv.read_field::<i32>(0).unwrap(), -7);
+        assert!((sv.read_field::<f32>(1).unwrap() - 1.5).abs() < 1e-6);
+    }
+
+    // ── Linux-only tests ──────────────────────────────────────────────────────
+
+    /// `getuid()` and `getgid()` take no arguments and return a `u32`.
+    /// We can't assert specific values, but both must return successfully and
+    /// agree with Rust's own `std::os::unix::process` view of the process.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_linux_getuid_getgid() {
+        let uid_def = DynCaller::define_function(&format!("{LIBC}|getuid||u32|")).unwrap();
+        let gid_def = DynCaller::define_function(&format!("{LIBC}|getgid||u32|")).unwrap();
+
+        let uid = *uid_def.prep().call().unwrap().as_u32().unwrap();
+        let gid = *gid_def.prep().call().unwrap().as_u32().unwrap();
+
+        // Cross-check against the libc crate's view of the same values.
+        assert_eq!(uid, unsafe { libc::getuid() });
+        assert_eq!(gid, unsafe { libc::getgid() });
+        println!("uid={uid} gid={gid}");
+    }
+
+    /// `gettimeofday(struct timeval *, NULL)` fills a two-field struct:
+    ///   `tv_sec`  (i64) — seconds since epoch
+    ///   `tv_usec` (i64) — microseconds (0 ≤ x < 1_000_000)
+    ///
+    /// This exercises struct-by-pointer output with a Linux-only POSIX call.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_linux_gettimeofday() {
+        // struct timeval { time_t tv_sec; suseconds_t tv_usec; }
+        // Both fields are 64-bit on x86-64 Linux.
+        let def = DynCaller::define_function(
+            &format!("{LIBC}|gettimeofday|*{{i64,i64}},ptr|i32|")
+        ).unwrap();
+
+        let mut tv = def.create_struct(0).unwrap();
+        tv.push_field(&0i64).unwrap(); // tv_sec
+        tv.push_field(&0i64).unwrap(); // tv_usec
+
+        let mut inv = def.prep();
+        inv.push_mut_arg(&mut tv).unwrap();
+        inv.push_arg(&crate::ArgVal::Pointer(std::ptr::null_mut())).unwrap();
+        let ret = inv.call().unwrap();
+
+        assert_eq!(*ret.as_i32().unwrap(), 0, "gettimeofday failed");
+
+        let tv_sec  = tv.read_field::<i64>(0).unwrap();
+        let tv_usec = tv.read_field::<i64>(1).unwrap();
+        println!("tv_sec={tv_sec} tv_usec={tv_usec}");
+
+        // Sanity: seconds since epoch should be somewhere after 2020.
+        assert!(tv_sec > 1_577_836_800, "tv_sec looks wrong: {tv_sec}");
+        assert!((0..1_000_000).contains(&tv_usec), "tv_usec out of range: {tv_usec}");
+    }
+
+    /// `uname(struct utsname *)` fills five fixed-length char arrays (each 65 bytes):
+    ///   sysname, nodename, release, version, machine.
+    ///
+    /// We map each field as a byte buffer of 65 bytes, then decode the first
+    /// null-terminated string from it.  Returns 0 on success.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_linux_uname() {
+        // struct utsname has 6 fields of [char; 65] on Linux x86-64
+        // (sysname, nodename, release, version, machine, domainname).
+        // We represent each as obuff=65 (fixed-size output byte buffer).
+        let def = DynCaller::define_function(
+            &format!("{LIBC}|uname|*{{obuff=65,obuff=65,obuff=65,obuff=65,obuff=65,obuff=65}}|i32|")
+        );
+
+        // uname takes a plain pointer to the struct, not a struct-by-value arg.
+        // Use a raw byte buffer instead.
+        use crate::ArgVal;
+        let uname_def = DynCaller::define_function(
+            &format!("{LIBC}|uname|ptr|i32|")
+        ).unwrap();
+
+        let mut buf = vec![0u8; 6 * 65];
+        let mut inv = uname_def.prep();
+        inv.push_arg(&ArgVal::Pointer(buf.as_mut_ptr() as *mut std::ffi::c_void)).unwrap();
+        let ret = inv.call().unwrap();
+        assert_eq!(*ret.as_i32().unwrap(), 0, "uname failed");
+
+        // Each field starts at offset n*65; read until the first NUL.
+        let field = |n: usize| -> String {
+            let start = n * 65;
+            let slice = &buf[start..start + 65];
+            let end = slice.iter().position(|&b| b == 0).unwrap_or(65);
+            String::from_utf8_lossy(&slice[..end]).into_owned()
+        };
+
+        let sysname  = field(0);
+        let nodename = field(1);
+        let release  = field(2);
+        let machine  = field(4);
+
+        println!("sysname={sysname} nodename={nodename} release={release} machine={machine}");
+
+        assert_eq!(sysname, "Linux", "expected sysname=Linux, got {sysname}");
+        assert!(!nodename.is_empty(), "nodename should not be empty");
+        assert!(!release.is_empty(),  "release should not be empty");
+        assert_eq!(machine, "x86_64", "expected machine=x86_64, got {machine}");
+
+        // Suppress unused-variable warning from the struct-descriptor attempt.
+        let _ = def;
+    }
 }
