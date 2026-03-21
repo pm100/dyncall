@@ -216,7 +216,7 @@ impl ToArg for CStr {
                 log::trace!("CStr to_arg ArgVal ptr: {:p}", pp);
                 let ppp = if let ArgVal::Pointer(ref p) = pp { p } else { panic!("Expected Pointer ArgVal") };
                 log::trace!("CStr to_arg final ptr: {:p}", ppp);
-                Ok(unsafe { mem::transmute::<&*mut c_void, *mut c_void>(ppp) })
+                Ok(ppp as *const *mut c_void as *mut c_void)
             }
             _ if func.func_def.coerce => {
                 let cstr = self.to_owned();

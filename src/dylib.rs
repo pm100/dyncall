@@ -45,7 +45,7 @@ impl DynamicLibrary {
         search_path.insert(0, path.to_path_buf());
         env::set_var(
             DynamicLibrary::envvar(),
-            &DynamicLibrary::create_path(&search_path),
+            DynamicLibrary::create_path(&search_path),
         );
     }
 
@@ -98,7 +98,7 @@ impl DynamicLibrary {
         if ptr.is_null() {
             Err(anyhow::anyhow!("Symbol '{}' not found in library", symbol))
         } else {
-            Ok(mem::transmute(ptr))
+            Ok(mem::transmute::<*mut u8, *mut ffi::c_void>(ptr))
         }
     }
 }
@@ -200,9 +200,9 @@ mod dl {
         let result = match filename {
             Some(filename) => {
                 let filename_str: Vec<_> =
-                    filename.encode_wide().chain(Some(0).into_iter()).collect();
+                    filename.encode_wide().chain(Some(0)).collect();
                 let result = unsafe { LoadLibraryW(filename_str.as_ptr() as *const libc::c_void) };
-                if result == ptr::null_mut() {
+                if result.is_null() {
                     let err = unsafe { GetLastError() };
                     Err(anyhow!("Error code {:08x}", err))
                 } else {

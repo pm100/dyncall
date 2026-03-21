@@ -3,7 +3,7 @@ use std::path::Path;
 use std::ptr;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::sync::{LazyLock, Mutex};
 
 use anyhow::Result;
@@ -38,7 +38,7 @@ pub struct FuncDef {
     pub(crate) entry_point: unsafe extern "C" fn(),
     pub(crate) ffi_arg_types: Vec<*mut ffi_type>,
     pub(crate) ffi_return_type: ffi_type,
-    _ffi_owned_types: Arc<Vec<OwnedStructFfiType>>,
+    _ffi_owned_types: Rc<Vec<OwnedStructFfiType>>,
     pub(crate) arg_types: Vec<ArgType>,
     pub(crate) return_type: ArgType,
     pub(crate) coerce: bool,
@@ -101,7 +101,7 @@ impl OwnedStructFfiType {
         elements.push(ptr::null_mut());
         let mut elements = elements.into_boxed_slice();
         let ffi_type = Box::new(ffi_type {
-            type_: low::type_tag::STRUCT as u16,
+            type_: low::type_tag::STRUCT,
             elements: elements.as_mut_ptr(),
             ..Default::default()
         });
@@ -159,8 +159,8 @@ impl FfiTypeStore {
         })
     }
 
-    fn into_arc(self) -> Arc<Vec<OwnedStructFfiType>> {
-        Arc::new(self.owned_structs)
+    fn into_arc(self) -> Rc<Vec<OwnedStructFfiType>> {
+        Rc::new(self.owned_structs)
     }
 }
 
@@ -248,12 +248,12 @@ impl DynCaller {
             .lock()
             .unwrap()
             .get_entry_point(lib_name, entry_point_name)?;
-        let entry_point = unsafe { std::mem::transmute(ep) };
+        let entry_point = unsafe { std::mem::transmute::<*mut ffi::c_void, unsafe extern "C" fn()>(ep) };
         let flag_str = funcdef[4];
         let mut func = FuncDef {
             cif: ffi_cif::default(),
             entry_point,
-            ffi_arg_types: ffi_arg_types,
+            ffi_arg_types,
             ffi_return_type: unsafe { *ffi_ret },
             _ffi_owned_types: ffi_store.into_arc(),
             arg_types: my_arg_types,
