@@ -8,3 +8,7 @@ consume it as a dependency:
 | BASIC    | `C:\work\forks\basic` |
 | Forth    | `C:\work\forks\forth` (GitHub repo: `forth-rs`) |
 | Loxido (Lox) | `C:\work\forks\loxido` |
+
+## Instructions
+
+- **Do not commit or push** any changes unless explicitly told to do so.
