@@ -14,3 +14,10 @@ enum-as-inner = "0.6.1"
 libc = "0.2.153"
 libffi = "4.1.2"
 log = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "file_copy"
+harness = false
