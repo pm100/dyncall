@@ -31,7 +31,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-dyncall = { git = "https://github.com/pm100/dyncall" }
+dyncall = "0.1"
 ```
 
 ### Workflow
@@ -244,6 +244,18 @@ let mut inv = def.prep();
 let result = inv.call();
 assert!(!result.as_pointer().unwrap().is_null());
 ```
+
+## Language forks using dyncall
+
+These interpreter forks use `dyncall` as their FFI layer, and serve as real-world examples of the library in use:
+
+| Language | Repository | Notes |
+|----------|-----------|-------|
+| BASIC | [pm100/basic](https://github.com/pm100/basic) | Fork of rodneykendall/basic |
+| Forth | [pm100/forth-rs](https://github.com/pm100/forth-rs) | Stack-based Forth interpreter |
+| Lox (Loxido) | [pm100/loxido](https://github.com/pm100/loxido) | Fork of tdp-org/loxido (Crafting Interpreters Lox) |
+
+Each fork adds a thin glue layer that translates the language's runtime values into `push_arg` / `push_mut_arg` calls — the interpreter author writes this once and the script author can then call any native function by name.
 
 ## Real-world example: BASIC interpreter
 

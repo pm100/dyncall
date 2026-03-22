@@ -2,8 +2,11 @@
 name = "dyncall"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Call functions in dynamic libraries at runtime without compile-time signature knowledge. Wraps libffi for scripting language interpreters and other dynamic dispatch use cases."
+license = "MIT"
+repository = "https://github.com/pm100/dyncall"
+keywords = ["ffi", "libffi", "dynamic", "scripting", "interop"]
+categories = ["api-bindings", "external-ffi-bindings"]
 
 [dependencies]
 anyhow = "1.0.81"
