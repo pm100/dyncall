@@ -82,6 +82,45 @@ pub enum ArgType {
     Void,
 
 }
+
+impl ArgType {
+    /// If this type is a struct (either `{...}` or `*{...}`), return the
+    /// underlying [`StructType`] that describes the fields.
+    ///
+    /// Returns `None` for every other type.
+    ///
+    /// This is the ergonomic way for scripting-language adapters to inspect
+    /// struct field types without manually matching both `Struct` and
+    /// `Pointer(Struct(...))`:
+    ///
+    /// ```
+    /// # use dyncall::{DynCaller, ArgType};
+    /// # fn example(fdef: &dyncall::FuncDef, i: usize) {
+    /// if let Some(st) = fdef.get_arg_type(i).struct_type() {
+    ///     for j in 0..st.field_count() {
+    ///         println!("  field {}: {:?}", j, st.field_type(j).unwrap());
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    pub fn struct_type(&self) -> Option<&StructType> {
+        match self {
+            ArgType::Struct(st) => Some(st),
+            ArgType::Pointer(inner) => inner.struct_type(),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this type is a struct passed by value (`{...}`).
+    pub fn is_struct_by_value(&self) -> bool {
+        matches!(self, ArgType::Struct(_))
+    }
+
+    /// Returns `true` if this type is a pointer to a struct (`*{...}`).
+    pub fn is_struct_ptr(&self) -> bool {
+        matches!(self, ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)))
+    }
+}
 impl ArgVal {
     pub(crate) fn payload_ptr(&self) -> *mut c_void {
         use ArgVal::*;

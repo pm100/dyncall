@@ -260,6 +260,8 @@ These interpreter forks use `dyncall` as their FFI layer, and serve as real-worl
 
 Each fork adds a thin glue layer that translates the language's runtime values into `push_arg` / `push_mut_arg` calls — the interpreter author writes this once and the script author can then call any native function by name.
 
+For a step-by-step guide to writing your own adapter, see **[ADAPTER_GUIDE.md](ADAPTER_GUIDE.md)**.
+
 ## Real-world example: BASIC interpreter
 
 [`basic`](https://github.com/pm100/basic) is a fork of [rodneykendall/basic](https://github.com/rodneykendall/basic), a BASIC interpreter written in Rust. The fork adds `dyncall` support, letting BASIC programs call arbitrary C functions at runtime with no Rust recompilation needed.
