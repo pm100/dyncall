@@ -943,4 +943,72 @@ mod test {
         // Suppress unused-variable warning from the struct-descriptor attempt.
         let _ = def;
     }
+
+    // ── Struct fields with ptr/cstr types ────────────────────────────────────
+
+    /// `struct lconv` (returned by `localeconv`) contains many `char *` fields.
+    /// Declare a representative slice as `*{cstr,cstr,cstr,ptr}` — the first
+    /// three are `char *` string pointers, the fourth is an opaque pointer.
+    ///
+    /// `localeconv()` returns a pointer to a static struct, so we use `*{...}`
+    /// as the return type. dyncall copies the pointed-to bytes into a
+    /// `StructValue`; we then read each field.
+    #[test]
+    fn test_localeconv_struct_ptr_return() {
+        // struct lconv starts with: char *decimal_point, *thousands_sep, *grouping
+        // We declare only the first three pointer fields to keep the test simple.
+        // All three are `char *` so we use `cstr` field type.
+        let def = DynCaller::define_function(
+            &format!("{LIBC}|localeconv||*{{cstr,cstr,cstr}}|")
+        ).unwrap();
+
+        let mut inv = def.prep();
+        let result = inv.call().unwrap();
+
+        // call() should have returned a StructValue (not a raw pointer) because
+        // the return type is *{...}.
+        let sv = result.as_struct_value().expect("expected StructValue from *{...} return");
+
+        // Read decimal_point as a String (follows the char * pointer).
+        let decimal_point = sv.read_field::<String>(0)
+            .expect("decimal_point field should be a valid cstr");
+
+        // In the "C" / default locale decimal_point is "." on all platforms.
+        // Even in other locales it must be non-empty.
+        println!("decimal_point={decimal_point:?}");
+        assert!(!decimal_point.is_empty(), "decimal_point should not be empty");
+    }
+
+    /// Build a struct that contains a `ptr` field, write a raw pointer into it,
+    /// and read it back — verifying round-trip through `*mut c_void` field support.
+    #[test]
+    fn test_struct_ptr_field_roundtrip() {
+        use crate::structs::StructType;
+        use crate::{ArgType, ArgVal, StructValue};
+        use std::ffi::c_void;
+
+        // Layout: { i32, ptr, i32 }
+        let st = StructType::new(vec![ArgType::I32, ArgType::OpaquePointer, ArgType::I32]).unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+
+        let sentinel: u32 = 0xDEAD_BEEF;
+        let raw: *mut c_void = &sentinel as *const u32 as *mut c_void;
+
+        sv.push_field(&42i32).unwrap();
+        sv.push_field(&raw).unwrap();
+        sv.push_field(&99i32).unwrap();
+
+        // Read numerics back normally
+        assert_eq!(sv.read_field::<i32>(0).unwrap(), 42);
+        assert_eq!(sv.read_field::<i32>(2).unwrap(), 99);
+
+        // Read ptr field back and follow it
+        let got_ptr = sv.read_field::<*mut c_void>(1).unwrap();
+        assert_eq!(got_ptr, raw);
+        let got_val = unsafe { *(got_ptr as *const u32) };
+        assert_eq!(got_val, sentinel, "pointer field should point at original value");
+
+        // Silence unused import
+        let _ = ArgVal::None;
+    }
 }

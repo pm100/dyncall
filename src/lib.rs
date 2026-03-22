@@ -167,6 +167,7 @@ pub use invoke::Invocation;
 pub use structs::CoerceFromField;
 pub use structs::CoerceIntoField;
 pub use structs::FromStructField;
+pub use structs::ScriptVal;
 pub use structs::StructType;
 pub use structs::StructValue;
 pub use structs::ToStructField;

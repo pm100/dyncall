@@ -203,6 +203,27 @@ impl<'a> Invocation<'a> {
         self.post_process_args();
         self.arg_ptrs.clear();
         self.arg_vals.clear();
+
+        // If the return type is *{...}, the callee returned a pointer to a struct.
+        // Copy the pointed-to bytes into a StructValue so the caller can read fields.
+        let result = if let ArgType::Pointer(inner) = &self.func_def.return_type {
+            if let ArgType::Struct(struct_type) = inner.as_ref() {
+                let raw_ptr = if let ArgVal::Pointer(p) = result { p } else { ptr::null_mut() };
+                if raw_ptr.is_null() {
+                    ArgVal::Pointer(ptr::null_mut())
+                } else {
+                    let sv = unsafe {
+                        crate::structs::StructValue::from_raw_ptr(raw_ptr as *const c_void, struct_type.clone())
+                    };
+                    ArgVal::StructValue(sv)
+                }
+            } else {
+                result
+            }
+        } else {
+            result
+        };
+
         Ok(result)
     }
 

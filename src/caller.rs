@@ -240,7 +240,7 @@ impl DynCaller {
         let return_type_str = funcdef[3];
         let my_ret = parse_arg_type(return_type_str)?;
         if matches!(my_ret, ArgType::Struct(_)) {
-            bail!("Struct return values are not supported yet");
+            bail!("Struct return values are not supported; use *{{...}} to return a pointer to a struct");
         }
         let ffi_ret = ffi_store.ffi_type_for(&my_ret)?;
         let arg_count = my_arg_types.len();

@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr};
 
 use anyhow::{bail, Result};
 
@@ -224,6 +224,10 @@ pub(crate) fn scalar_layout(arg_type: &ArgType) -> Option<(usize, usize)> {
         }
         ArgType::F32 => Some((std::mem::size_of::<f32>(), std::mem::align_of::<f32>())),
         ArgType::F64 => Some((std::mem::size_of::<f64>(), std::mem::align_of::<f64>())),
+        ArgType::OpaquePointer | ArgType::CString => Some((
+            std::mem::size_of::<*mut c_void>(),
+            std::mem::align_of::<*mut c_void>(),
+        )),
         _ => None,
     }
 }
@@ -427,3 +431,107 @@ impl_coerce_into_field!(u32);
 impl_coerce_into_field!(i64);
 impl_coerce_into_field!(u64);
 impl_coerce_into_field!(f32);
+
+// ── Pointer / cstr field support ──────────────────────────────────────────────
+
+const PTR_SIZE: usize = std::mem::size_of::<*mut c_void>();
+
+impl ToStructField for *mut c_void {
+    fn write_field(&self, expected: &ArgType, dst: &mut [u8]) -> Result<()> {
+        match expected {
+            ArgType::OpaquePointer | ArgType::CString => {
+                let bytes = (*self as usize).to_ne_bytes();
+                dst[..PTR_SIZE].copy_from_slice(&bytes);
+                Ok(())
+            }
+            _ => bail!("Expected ptr/cstr field, received *mut c_void"),
+        }
+    }
+}
+
+impl FromStructField for *mut c_void {
+    fn read_field(expected: &ArgType, src: &[u8]) -> Result<Self> {
+        match expected {
+            ArgType::OpaquePointer | ArgType::CString => {
+                let addr = usize::from_ne_bytes(src[..PTR_SIZE].try_into().unwrap());
+                Ok(addr as *mut c_void)
+            }
+            _ => bail!("Expected ptr/cstr field, requested *mut c_void"),
+        }
+    }
+}
+
+/// Read a `cstr` struct field: load the pointer stored in the field bytes and
+/// follow it to produce an owned `String`. Returns an error if the field is
+/// not declared as `cstr`, or if the pointer is null.
+impl FromStructField for String {
+    fn read_field(expected: &ArgType, src: &[u8]) -> Result<Self> {
+        match expected {
+            ArgType::CString => {
+                let addr = usize::from_ne_bytes(src[..PTR_SIZE].try_into().unwrap());
+                if addr == 0 {
+                    bail!("cstr field is null");
+                }
+                let s = unsafe { CStr::from_ptr(addr as *const c_char) }
+                    .to_string_lossy()
+                    .into_owned();
+                Ok(s)
+            }
+            _ => bail!("Expected cstr field, requested String"),
+        }
+    }
+}
+
+impl StructValue {
+    /// Materialise a `StructValue` by copying `layout.size` bytes from `ptr`.
+    ///
+    /// # Safety
+    /// `ptr` must point to at least `layout.size` valid, initialised bytes
+    /// with the field layout described by `layout`.
+    pub unsafe fn from_raw_ptr(ptr: *const c_void, layout: StructType) -> Self {
+        let size = layout.size;
+        let mut bytes = vec![0u8; size];
+        std::ptr::copy_nonoverlapping(ptr as *const u8, bytes.as_mut_ptr(), size);
+        Self { layout, bytes, next_field: 0 }
+    }
+
+    /// Build a [`StructValue`] from a slice of [`ScriptVal`]s.
+    ///
+    /// Each element is coerced to the declared field type.  Adapters convert
+    /// their native number type (f64, i64, …) to `ScriptVal::Number` before
+    /// calling this.
+    pub fn from_script_vals(arg_type: &ArgType, vals: &[ScriptVal]) -> Result<Self> {
+        let mut sv = StructValue::new(arg_type)?;
+        for val in vals {
+            match val {
+                ScriptVal::Number(n) => sv.push_field_coerced(n)?,
+                ScriptVal::Str(_) => sv.push_field_coerced(&0.0f64)?,
+            }
+        }
+        Ok(sv)
+    }
+
+    /// Read field `index` as a [`ScriptVal`].
+    ///
+    /// For `cstr` fields the stored pointer is followed to produce an owned
+    /// `String`. All other numeric field types are widened to `f64`.
+    pub fn script_read(&self, index: usize) -> Result<ScriptVal> {
+        if let Ok(s) = self.read_field::<String>(index) {
+            return Ok(ScriptVal::Str(s));
+        }
+        let n = self.read_field_coerced::<f64>(index)?;
+        Ok(ScriptVal::Number(n))
+    }
+}
+
+/// A dynamically-typed field value for use by scripting-language adapters.
+///
+/// Returned by [`StructValue::script_read`] and accepted by constructors like
+/// [`StructValue::from_script_vals`].
+#[derive(Debug, Clone)]
+pub enum ScriptVal {
+    /// Numeric field (all integer and float types are widened to `f64`).
+    Number(f64),
+    /// String field (`cstr` pointer followed to produce an owned string).
+    Str(String),
+}
