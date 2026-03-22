@@ -430,6 +430,35 @@ let ret = invoke.call();
 
 After the call, updated output buffers are written back to BASIC variables automatically.
 
+## Performance
+
+Benchmarks measure two things: end-to-end throughput and raw per-call overhead.
+Run them with `cargo bench` (results appear in `target/criterion/`).
+
+### File copy — 50,000 lines (~96 bytes each)
+
+Each iteration opens two files, copies every line, and closes them.
+The dyncall version calls `fopen`/`fgets`/`fputs`/`fclose` through the dispatcher;
+the native version uses `BufReader`/`BufWriter`.
+
+| Approach | Time | Ratio |
+|----------|------|-------|
+| Native Rust | 13.6 ms | 1× |
+| dyncall | 60.0 ms | ~4.4× |
+
+The overhead comes from ~100,000 individual dyncall invocations (two per line).
+
+### Per-call overhead — 10,000 calls to `abs`
+
+| Approach | Total (10k calls) | Per call |
+|----------|-------------------|----------|
+| Native Rust `i32::abs` | ~5 µs | ~0.5 ns |
+| dyncall | ~1.45 ms | ~145 ns |
+
+Each dyncall invocation costs roughly **145 ns** — it dynamically resolves argument
+types, marshals values through libffi, and dispatches the call at runtime.
+This is fast enough that scripting-language overhead dominates in practice.
+
 ## Running tests
 
 ```sh
