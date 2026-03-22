@@ -23,9 +23,11 @@ static DYNCALLER: LazyLock<Mutex<DynCaller>> = LazyLock::new(|| Mutex::new(DynCa
 ///
 /// `DynCaller` caches library handles so each library is only opened once.
 /// It is accessed through a global `LazyLock<Mutex<DynCaller>>` internally;
-/// you interact with it only via the static method [`DynCaller::define_function`].
+/// you interact with it via the static methods [`DynCaller::define_function`]
+/// and [`DynCaller::set_default_coerce`].
 pub struct DynCaller {
     libs: HashMap<String, DynamicLibrary>,
+    default_coerce: bool,
 }
 
 /// A compiled, reusable definition of a foreign function.
@@ -174,6 +176,7 @@ impl DynCaller {
     fn new() -> Self {
         DynCaller {
             libs: HashMap::new(),
+            default_coerce: false,
         }
     }
 
@@ -262,7 +265,7 @@ impl DynCaller {
             capture_errno: false,
         };
         let flags = Self::parse_flags(flag_str)?;
-        func.coerce = flags.coerce;
+        func.coerce = flags.coerce || DYNCALLER.lock().unwrap().default_coerce;
         func.capture_errno = flags.capture_errno;
         unsafe {
             if flags.has_fixed_args {
@@ -289,6 +292,32 @@ impl DynCaller {
 
         Ok(func)
     }
+    /// Set or clear the process-wide default coerce flag.
+    ///
+    /// When enabled, every subsequent call to [`DynCaller::define_function`]
+    /// behaves as if the descriptor included `coerce` in its flags — even when
+    /// the descriptor itself omits it.  A descriptor that already includes
+    /// `coerce` is unaffected (the flag is OR-d in).
+    ///
+    /// This is intended for scripting-language adapters whose runtime value
+    /// model is always loosely typed (e.g. everything is an `f64`).  Call this
+    /// once during interpreter startup instead of appending `coerce` to every
+    /// descriptor string your users write.
+    ///
+    /// ```rust
+    /// use dyncall::DynCaller;
+    /// DynCaller::set_default_coerce(true);
+    /// // All define_function calls from here on have coerce enabled
+    /// ```
+    pub fn set_default_coerce(enabled: bool) {
+        DYNCALLER.lock().unwrap().default_coerce = enabled;
+    }
+
+    /// Returns the current process-wide default coerce setting.
+    pub fn default_coerce() -> bool {
+        DYNCALLER.lock().unwrap().default_coerce
+    }
+
     fn parse_flags(flag_str: &str) -> Result<Flags> {
         let mut flags = Flags {
             has_fixed_args: false,

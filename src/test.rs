@@ -571,6 +571,27 @@ mod test {
     }
 
     #[test]
+    fn test_default_coerce_global_flag() {
+        // Save original state so we don't pollute other tests.
+        let original = DynCaller::default_coerce();
+
+        DynCaller::set_default_coerce(true);
+        // Descriptor has no coerce flag — but global default makes it coerce.
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        assert!(def.is_coerce(), "global coerce should be inherited");
+        let mut inv = def.prep();
+        inv.push_arg(&-42i64).unwrap(); // i64 into i32 slot — only works with coerce
+        assert_eq!(*inv.call().unwrap().as_i32().unwrap(), 42);
+
+        // Explicit coerce in descriptor is also fine (OR semantics).
+        let def2 = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        assert!(def2.is_coerce());
+
+        // Restore.
+        DynCaller::set_default_coerce(original);
+    }
+
+    #[test]
     fn test_fgets_via_file() {
         // Write a known string to a temp file, then read it back with fgets.
         use crate::ArgVal;

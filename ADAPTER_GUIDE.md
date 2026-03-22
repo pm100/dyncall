@@ -333,7 +333,27 @@ whether their `42.0` will fit into an `i32` slot.
 Without `coerce`, `push_arg` returns `Err` if the Rust type of the value
 doesn't exactly match the declared argument type.
 
----
+### Global coerce default
+
+If your language is loosely typed throughout, enable coercion once at startup
+instead of appending `coerce` to every descriptor your users write:
+
+```rust
+// At interpreter startup — applies to all subsequent define_function calls.
+DynCaller::set_default_coerce(true);
+```
+
+After this, every descriptor behaves as if it included `coerce`, even when the
+script author omits it.  Descriptors that already include `coerce` are
+unaffected (the flag is OR-d in).
+
+```rust
+// Both of these are equivalent after set_default_coerce(true):
+DynCaller::define_function("msvcrt.dll|abs|i32|i32|")
+DynCaller::define_function("msvcrt.dll|abs|i32|i32|coerce")
+```
+
+Query the current setting with `DynCaller::default_coerce() -> bool`.
 
 ## The errno flag
 

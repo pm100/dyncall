@@ -94,6 +94,15 @@ If neither qualifier is given the buffer is not pre-allocated; the callee must n
 
 Flags can be combined with a comma: `fixargs=1,coerce`.
 
+Scripting-language adapters where all values are loosely typed can enable coercion globally at startup rather than per-descriptor:
+
+```rust
+DynCaller::set_default_coerce(true);
+// All subsequent define_function calls behave as if "coerce" is in their flags.
+```
+
+`DynCaller::default_coerce()` returns the current setting.
+
 ### Error capture (`errno` flag)
 
 Adding `errno` to the flags causes the platform error code to be captured immediately after the foreign function returns — before any other code can overwrite it.
