@@ -46,7 +46,7 @@ pub enum LengthDef {
 
 /// Describes the type of a single argument or return value in a [`FuncDef`](crate::FuncDef).
 ///
-/// These are produced automatically by [`DynCaller::define_function_by_str`](crate::DynCaller::define_function_by_str)
+/// These are produced automatically by [`DynCaller::define_function`](crate::DynCaller::define_function)
 /// from the type tokens in the descriptor string (see crate-level docs).
 #[derive(Clone, Debug)]
 pub enum ArgType {

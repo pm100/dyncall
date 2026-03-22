@@ -11,7 +11,7 @@ A Rust crate for calling functions in dynamic libraries at runtime, without need
 The typical pattern is:
 
 1. Your scripting language includes a mechanism for the user to declare an external function (library path, symbol, argument types, return type).
-2. Your interpreter calls `DynCaller::define_function_by_str` once to compile that declaration into a `FuncDef`.
+2. Your interpreter calls `DynCaller::define_function` once to compile that declaration into a `FuncDef`.
 3. Each time the user's script invokes the function, you create an `Invocation`, push the script's runtime values as arguments, and call it.
 
 The Rust examples in this README demonstrate the raw `dyncall` API. In practice, **you** write the glue layer that translates your language's values into `push_arg` / `push_mut_arg` calls — `dyncall` handles everything below that.
@@ -36,7 +36,7 @@ dyncall = "0.1"
 
 ### Workflow
 
-1. Define a function with [`DynCaller::define_function_by_str`]
+1. Define a function with [`DynCaller::define_function`]
 2. Prepare an [`Invocation`] via [`FuncDef::prep`]
 3. Push arguments with `push_arg` (input) or `push_mut_arg` (output / pointer)
 4. Call with `call` or `call_and_return`
@@ -67,7 +67,7 @@ All five `|`-separated fields are required (the last two may be empty).
 | `*{T1,T2,...}`         | pointer to a flat struct                           |
 | `void`                 | no return value                                    |
 
-Struct support in the first version is limited to **flat structs whose fields are primitive scalar types** (`i8/u8`, `i16/u16`, `i32/u32`, `i64/u64`, `f32`, `f64`). Nested structs and pointer fields inside `{...}` are not supported yet.
+Struct fields may be any of the primitive scalar types (`i8/u8`, `i16/u16`, `i32/u32`, `i64/u64`, `f32`, `f64`) or `cstr` (a `char *` pointer followed to produce an owned string). Nested structs are not supported.
 
 ### Output buffer sizing (`ocstr` and `obuff`)
 
@@ -99,7 +99,7 @@ Flags can be combined with a comma: `fixargs=1,coerce`.
 Adding `errno` to the flags causes the platform error code to be captured immediately after the foreign function returns — before any other code can overwrite it.
 
 ```rust
-let def = DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
+let def = DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
 let mut inv = def.prep();
 inv.push_arg(&"/no/such/file".to_string()).unwrap();
 inv.push_arg(&"r".to_string()).unwrap();
@@ -129,12 +129,12 @@ By default `push_arg` returns `Err` if the Rust type of the value does not match
 
 ```rust
 // Strict mode (default) — i64 into an i32 slot returns Err
-let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
 let mut inv = def.prep();
 assert!(inv.push_arg(&42i64).is_err());
 
 // Coerce mode — any numeric type works, strings are parsed
-let def = DynCaller::define_function_by_str(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
 let mut inv = def.prep();
 inv.push_arg(&42i64).unwrap();        // i64 → i32: truncate
 inv = def.prep();
@@ -154,7 +154,7 @@ use dyncall::DynCaller;
 #[cfg(target_os = "macos")]   const LIBC: &str = "libSystem.B.dylib";
 #[cfg(target_os = "linux")]   const LIBC: &str = "libc.so.6";
 
-let def = DynCaller::define_function_by_str(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
 let mut inv = def.prep();
 inv.push_arg(&"42".to_string()).unwrap();
 let result = inv.call();
@@ -166,7 +166,7 @@ assert_eq!(*result.as_i32().unwrap(), 42);
 ```rust
 // printf(const char *fmt, ...) → int
 // fixargs=1 means 1 fixed argument (the format string)
-let def = DynCaller::define_function_by_str(
+let def = DynCaller::define_function(
     &format!("{LIBC}|printf|cstr,cstr,i32|i32|fixargs=1")
 ).unwrap();
 let mut inv = def.prep();
@@ -180,7 +180,7 @@ inv.call();
 
 ```rust
 // sscanf writes the parsed value back through a pointer argument
-let def = DynCaller::define_function_by_str(
+let def = DynCaller::define_function(
     &format!("{LIBC}|sscanf|cstr,cstr,*i32|i32|fixargs=2")
 ).unwrap();
 let mut ans = 0i32;
@@ -195,7 +195,7 @@ assert_eq!(ans, 42);
 ### Pass a struct by value
 
 ```rust
-let def = DynCaller::define_function_by_str(
+let def = DynCaller::define_function(
     "myffi.dll|sum_pair|{u32,u32}|u32|"
 ).unwrap();
 
@@ -212,7 +212,7 @@ assert_eq!(*result.as_u32().unwrap(), 42);
 ### Pass a pointer to a struct
 
 ```rust
-let def = DynCaller::define_function_by_str(
+let def = DynCaller::define_function(
     "myffi.dll|bump_pair|*{u32,u32}|u32|"
 ).unwrap();
 
@@ -233,16 +233,19 @@ assert_eq!(pair.read_field::<u32>(1).unwrap(), 10);
 ```rust
 // localeconv(void) -> struct lconv *
 //
-// `dyncall` can call this today by treating the return value as an opaque
-// pointer. The pointed-to `struct lconv` cannot be described with `{...}`
-// yet because it contains pointer fields.
-let def = DynCaller::define_function_by_str(
-    &format!("{LIBC}|localeconv||ptr|")
+// The return type *{cstr,cstr} tells dyncall to follow the pointer and
+// return a StructValue containing the first two fields (decimal_point,
+// thousands_sep) as owned strings.
+let def = DynCaller::define_function(
+    &format!("{LIBC}|localeconv||*{{cstr,cstr}}|")
 ).unwrap();
 
 let mut inv = def.prep();
 let result = inv.call();
-assert!(!result.as_pointer().unwrap().is_null());
+let sv = result.as_struct_value().unwrap();
+// field 0: decimal_point, field 1: thousands_sep
+println!("decimal_point: {:?}", sv.script_read(0).unwrap());
+println!("thousands_sep: {:?}", sv.script_read(1).unwrap());
 ```
 
 ## Language forks using dyncall
@@ -303,13 +306,13 @@ Use `fopen` on the special device nodes `/dev/stdin`, `/dev/stdout`, `/dev/stder
 #[cfg(target_os = "linux")]  const LIBC: &str = "libc.so.6";
 #[cfg(target_os = "macos")]  const LIBC: &str = "libSystem.B.dylib";
 
-let fopen_def = DynCaller::define_function_by_str(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
+let fopen_def = DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|")).unwrap();
 let mut inv = fopen_def.prep();
 inv.push_arg(&"/dev/stderr".to_string()).unwrap();
 inv.push_arg(&"w".to_string()).unwrap();
 let stderr_fp = *inv.call().as_pointer().unwrap();
 
-let fputs_def = DynCaller::define_function_by_str(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
+let fputs_def = DynCaller::define_function(&format!("{LIBC}|fputs|cstr,ptr|i32|")).unwrap();
 let mut inv = fputs_def.prep();
 inv.push_arg(&"hello from dyncall".to_string()).unwrap();
 inv.push_arg(&ArgVal::Pointer(stderr_fp)).unwrap();
@@ -324,12 +327,12 @@ Use `__acrt_iob_func` from `ucrtbase.dll` to obtain a standard stream handle, th
 
 ```rust
 // Windows
-let iob_def = DynCaller::define_function_by_str("ucrtbase.dll|__acrt_iob_func|u32|ptr|").unwrap();
+let iob_def = DynCaller::define_function("ucrtbase.dll|__acrt_iob_func|u32|ptr|").unwrap();
 let mut inv = iob_def.prep();
 inv.push_arg(&2u32).unwrap(); // 2 = stderr
 let stderr_fp = *inv.call().as_pointer().unwrap();
 
-let fputs_def = DynCaller::define_function_by_str("ucrtbase.dll|fputs|cstr,ptr|i32|").unwrap();
+let fputs_def = DynCaller::define_function("ucrtbase.dll|fputs|cstr,ptr|i32|").unwrap();
 let mut inv = fputs_def.prep();
 inv.push_arg(&"hello from dyncall".to_string()).unwrap();
 inv.push_arg(&ArgVal::Pointer(stderr_fp)).unwrap();
@@ -405,19 +408,19 @@ Pass a `struct tm *` via a BASIC array and let `strftime` write derived fields b
 The interpreter registers external functions at `DEF XFN` time and calls them via `FuncDef::prep` / `push_arg` / `push_mut_arg`:
 
 ```rust
-use dyncall::{ArgType, ArgVal, FuncDef};
+use dyncall::{ArgType, ArgVal, DynCaller, ScriptVal, StructValue};
 
 // At DEF XFN time: parse the descriptor and store the FuncDef
-let fdef = DynCaller::define_function_by_str(defstr).unwrap();
+let fdef = DynCaller::define_function(defstr).unwrap();
 interpreter.external_functions.insert(name, fdef);
 
 // At call time: marshal BASIC values into the invocation
 let mut invoke = fdef.prep();
 for (i, arg_value) in arg_values.into_iter().enumerate() {
     if let ArgType::Pointer(_) = fdef.get_arg_type(i) {
-        invoke.push_mut_arg(&mut out_num_buffer);   // output numeric
+        invoke.push_mut_arg(&mut out_num_buffer).unwrap();   // output numeric
     } else if let ArgType::OCString(_) = fdef.get_arg_type(i) {
-        invoke.push_mut_arg(&mut out_string_buffer); // output string
+        invoke.push_mut_arg(&mut out_string_buffer).unwrap(); // output string
     } else {
         match arg_value {
             Value::Number(n) => invoke.push_arg(&(n as i64)).unwrap(),
@@ -429,6 +432,49 @@ let ret = invoke.call();
 ```
 
 After the call, updated output buffers are written back to BASIC variables automatically.
+
+### Scripting adapter helpers
+
+`dyncall` provides helpers so adapter authors don't need to work directly with `StructValue` field types.
+
+#### Building a struct from script values
+
+Convert your language's runtime values to [`ScriptVal`] and call [`StructValue::from_script_vals`]:
+
+```rust
+use dyncall::{ArgType, ScriptVal, StructValue};
+
+// BASIC stores all numbers as f64; convert to ScriptVal before building
+let script_vals: Vec<ScriptVal> = basic_array.iter().map(|v| match v {
+    Value::Number(n) => ScriptVal::Number(*n),
+    Value::String(s) => ScriptVal::Str(s.clone()),
+}).collect();
+let sv = StructValue::from_script_vals(arg_type, &script_vals).unwrap();
+```
+
+Forth uses `i64` on its stack — the conversion is just a cast:
+
+```rust
+let script_vals: Vec<ScriptVal> = stack_slots.iter()
+    .map(|&n| ScriptVal::Number(n as f64))
+    .collect();
+let sv = StructValue::from_script_vals(arg_type, &script_vals).unwrap();
+```
+
+#### Reading struct fields after a call
+
+[`StructValue::script_read`] returns a [`ScriptVal`] for each field — numeric fields as `ScriptVal::Number(f64)`, `cstr` fields as `ScriptVal::Str(String)`:
+
+```rust
+if let Some(sv) = ret.as_struct_value() {
+    for fi in 0..sv.field_count() {
+        match sv.script_read(fi).unwrap() {
+            ScriptVal::Number(n) => write_back_number(fi, n),
+            ScriptVal::Str(s)    => write_back_string(fi, s),
+        }
+    }
+}
+```
 
 ## Performance
 

@@ -23,14 +23,14 @@ static DYNCALLER: LazyLock<Mutex<DynCaller>> = LazyLock::new(|| Mutex::new(DynCa
 ///
 /// `DynCaller` caches library handles so each library is only opened once.
 /// It is accessed through a global `LazyLock<Mutex<DynCaller>>` internally;
-/// you interact with it only via the static method [`DynCaller::define_function_by_str`].
+/// you interact with it only via the static method [`DynCaller::define_function`].
 pub struct DynCaller {
     libs: HashMap<String, DynamicLibrary>,
 }
 
 /// A compiled, reusable definition of a foreign function.
 ///
-/// Created by [`DynCaller::define_function_by_str`]. A `FuncDef` is cheap to
+/// Created by [`DynCaller::define_function`]. A `FuncDef` is cheap to
 /// clone and can be used to create multiple independent [`Invocation`]s.
 #[derive(Clone)]
 pub struct FuncDef {
