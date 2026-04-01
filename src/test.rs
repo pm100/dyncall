@@ -77,6 +77,27 @@ mod test {
         println!("atoi ret={:?}", ret.as_i32().unwrap());
         assert_eq!(*ret.as_i32().unwrap(), 12345);
     }
+    /// `strerror(i32) -> const char*` — verifies that cstr return values are
+    /// dereferenced into Rust strings rather than left as raw pointer addresses.
+    #[test]
+    fn test_cstr_return() {
+        let def =
+            DynCaller::define_function(&format!("{LIBC}|strerror|i32|cstr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&22i32).unwrap(); // EINVAL = 22 on all platforms
+        let ret = inv.call().unwrap();
+        let raw = ret.as_rust_string().unwrap();
+        let s = unsafe { &**raw };
+        println!("strerror(22) = {:?}", s);
+        assert!(!s.is_empty(), "strerror returned an empty string");
+        // If the bug were present we would get a raw pointer address back
+        // (a large decimal number). Confirm the value looks like text.
+        assert!(
+            s.parse::<u64>().is_err(),
+            "strerror returned a raw pointer address instead of a string: {s}"
+        );
+    }
+
     #[test]
     fn test_fread() {
         let fopen_def =
