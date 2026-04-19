@@ -164,7 +164,7 @@ impl<'a> Invocation<'a> {
             );
         }
         let mut cif = self.func_def.cif;
-        self.pre_process_args();
+        self.pre_process_args()?;
         let result = match self.func_def.ffi_return_type.type_ as u32 {
             FFI_TYPE_POINTER => ArgVal::Pointer(ptr::null_mut()),
             FFI_TYPE_UINT64 => ArgVal::U64(0),
@@ -178,7 +178,7 @@ impl<'a> Invocation<'a> {
             FFI_TYPE_FLOAT => ArgVal::F32(0.0),
             FFI_TYPE_DOUBLE => ArgVal::F64(0.0),
             FFI_TYPE_VOID => ArgVal::None,
-            _ => panic!("Unsupported return type"),
+            t => bail!("Unsupported FFI return type code: {}", t),
         };
 
         let addr = match result {
@@ -257,35 +257,39 @@ impl<'a> Invocation<'a> {
         self.last_errno
     }
 
-    fn resolve_length(&self, ldef: &LengthDef) -> Option<usize> {
+    fn resolve_length(&self, ldef: &LengthDef) -> Result<Option<usize>> {
         match ldef {
             LengthDef::Arg(argnum) => {
                 let len = match self.arg_vals.get((*argnum * 2 + 1) as usize) {
-                    Some(ArgVal::U32(v)) => *v as usize,
-                    Some(ArgVal::I32(v)) => *v as usize,
-                    Some(ArgVal::U64(v)) => *v as usize,
-                    Some(ArgVal::I64(v)) => *v as usize,
-                    _ => panic!("Invalid length arg type for output buffer"),
+                    Some(ArgVal::Char(v)) => *v as usize,
+                    Some(ArgVal::U16(v))  => *v as usize,
+                    Some(ArgVal::I16(v))  => *v as usize,
+                    Some(ArgVal::U32(v))  => *v as usize,
+                    Some(ArgVal::I32(v))  => *v as usize,
+                    Some(ArgVal::U64(v))  => *v as usize,
+                    Some(ArgVal::I64(v))  => *v as usize,
+                    _ => bail!("length arg {} is not an integer type", argnum),
                 };
-                Some(len)
+                Ok(Some(len))
             }
-            LengthDef::Fixed(len) => Some(*len),
-            LengthDef::None => None,
+            LengthDef::Fixed(len) => Ok(Some(*len)),
+            LengthDef::None => Ok(None),
         }
     }
 
-    fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) {
-        let Some(len) = self.resolve_length(ldef) else { return };
+    fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) -> Result<()> {
+        let Some(len) = self.resolve_length(ldef)? else { return Ok(()) };
         if let ArgVal::RustString(str) = &mut self.arg_vals[arg_idx * 2 + 1] {
             let s = unsafe { &mut **str };
             s.reserve(len + 1); // +1 for null terminator
             log::trace!("pre_process_ocstring reserved len={}", len);
             self.arg_vals[arg_idx * 2] = ArgVal::Pointer(s.as_mut_ptr() as *mut c_void);
         };
+        Ok(())
     }
 
-    fn pre_process_obytebuffer(&mut self, arg_idx: usize, ldef: &LengthDef) {
-        let Some(len) = self.resolve_length(ldef) else { return };
+    fn pre_process_obytebuffer(&mut self, arg_idx: usize, ldef: &LengthDef) -> Result<()> {
+        let Some(len) = self.resolve_length(ldef)? else { return Ok(()) };
         match &mut self.arg_vals[arg_idx * 2 + 1] {
             ArgVal::RustString(str) => {
                 let s = unsafe { &mut **str };
@@ -301,37 +305,36 @@ impl<'a> Invocation<'a> {
             }
             _ => {}
         };
+        Ok(())
     }
-    fn pre_process_args(&mut self) {
-        // for mutable args, prepare buffers etc.
 
+    fn pre_process_args(&mut self) -> Result<()> {
         for (i, arg_type) in self.func_def.arg_types.iter().enumerate() {
             match arg_type {
                 ArgType::OCString(ldef) => {
-                    self.pre_process_ocstring(i, ldef);
+                    self.pre_process_ocstring(i, ldef)?;
                 }
                 ArgType::OByteBuffer(ldef) => {
-                    self.pre_process_obytebuffer(i, ldef);
+                    self.pre_process_obytebuffer(i, ldef)?;
                 }
                 _ => {}
             }
         }
+        Ok(())
     }
     fn post_process_args(&mut self) {
         for (i, arg_type) in self.func_def.arg_types.iter().enumerate() {
             match arg_type {
                 ArgType::OCString(_ldef) => {
                     if let ArgVal::Pointer(p) = self.arg_vals[i * 2] {
-                        //  let &mut str = *self.arg_vals[val_idx].as_rust_string_mut().unwrap();
-                        let arg_str = self.arg_vals.get_mut(i * 2 + 1).unwrap();
-                        let _foo = arg_str.as_rust_string_mut().unwrap();
-                        if let ArgVal::RustString(str) = arg_str {
+                        if let ArgVal::RustString(str) = self.arg_vals.get_mut(i * 2 + 1).unwrap() {
                             unsafe {
-                                let len = strlen(p as *const i8);
                                 let str = &mut **str;
+                                // Cap at capacity so a non-terminated buffer can't overrun.
+                                let cap = str.capacity();
+                                let len = strlen(p as *const i8).min(cap);
                                 log::trace!("fgets post_process_args len={}", len);
                                 str.as_mut_vec().set_len(len);
-                                // let rep_str = String::from_raw_parts(*p as *mut u8, len, cap);
                             }
                         }
                     }

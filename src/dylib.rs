@@ -93,7 +93,8 @@ impl DynamicLibrary {
 
     /// Access the value at the symbol of the dynamic library
     pub unsafe fn symbol(&self, symbol: &str) -> Result<*mut ffi::c_void> {
-        let raw_string = CString::new(symbol).unwrap();
+        let raw_string = CString::new(symbol)
+            .map_err(|e| anyhow::anyhow!("Symbol name contains an interior nul byte: {}", e))?;
         let ptr = dl::symbol(self.handle as *mut u8, raw_string.as_ptr());
         if ptr.is_null() {
             Err(anyhow::anyhow!("Symbol '{}' not found in library", symbol))
@@ -121,20 +122,17 @@ mod dl {
     use std::ptr;
     use std::str;
     pub fn open(filename: Option<&OsStr>) -> Result<*mut u8> {
-        check_for_errors_in(|| unsafe {
-            match filename {
-                Some(filename) => open_external(filename),
-                None => open_internal(),
+        match filename {
+            Some(filename) => {
+                let s = CString::new(filename.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("Library path contains an interior nul byte: {}", e))?;
+                check_for_errors_in(|| unsafe { dlopen(s.as_ptr(), LAZY) as *mut u8 })
             }
-        })
+            None => check_for_errors_in(|| unsafe { open_internal() }),
+        }
     }
 
     const LAZY: libc::c_int = 1;
-
-    unsafe fn open_external(filename: &OsStr) -> *mut u8 {
-        let s = CString::new(filename.as_bytes()).unwrap(); //to_cstring().unwrap();
-        dlopen(s.as_ptr(), LAZY) as *mut u8
-    }
 
     unsafe fn open_internal() -> *mut u8 {
         dlopen(ptr::null(), LAZY) as *mut u8
@@ -152,7 +150,7 @@ mod dl {
                 Ok(result)
             } else {
                 let s = CStr::from_ptr(last_error).to_bytes();
-                bail!(str::from_utf8(s).unwrap().to_string())
+                bail!("{}", String::from_utf8_lossy(s))
             }
         }
     }

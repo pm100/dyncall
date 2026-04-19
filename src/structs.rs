@@ -25,10 +25,24 @@ pub struct StructValue {
     next_field: usize,
 }
 
+/// Write a Rust value into a struct field byte slice.
+///
+/// Implemented for all scalar types that can appear as struct fields:
+/// `u8`, `i8` (as `Char`), `u16`, `i16`, `u32`, `i32`, `u64`, `i64`,
+/// `f32`, `f64`, `*mut c_void`.
+///
+/// Used by [`StructValue::push_field`].
 pub trait ToStructField {
     fn write_field(&self, expected: &ArgType, dst: &mut [u8]) -> Result<()>;
 }
 
+/// Read a Rust value from a struct field byte slice.
+///
+/// Implemented for all scalar types that can appear as struct fields:
+/// `u8`, `i8` (as `Char`), `u16`, `i16`, `u32`, `i32`, `u64`, `i64`,
+/// `f32`, `f64`, `*mut c_void`, `String` (follows a `char *` pointer).
+///
+/// Used by [`StructValue::read_field`].
 pub trait FromStructField: Sized {
     fn read_field(expected: &ArgType, src: &[u8]) -> Result<Self>;
 }

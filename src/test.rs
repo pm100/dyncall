@@ -800,6 +800,34 @@ mod test {
     }
 
     #[test]
+    fn test_push_none_argval_returns_error() {
+        use crate::ArgVal;
+        // ArgVal::None has no fixed-size payload; push_arg must return Err.
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        let result = inv.push_arg(&ArgVal::None);
+        assert!(result.is_err(), "push_arg(ArgVal::None) should return an error");
+    }
+
+    #[test]
+    fn test_invalid_length_arg_type_returns_error() {
+        // Declare fgets with the length arg (arg 1) typed as f32 rather than i32.
+        // resolve_length will find an F32 ArgVal and must return Err, not panic.
+        // We use fgets(char*, int, FILE*) but lie about arg 1 being f32.
+        // The error fires in pre_process_args() before any FFI call is made.
+        let def = DynCaller::define_function(
+            &format!("{LIBC}|abs|f32,ocstr=arg0|void|")
+        ).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&1.0f32).unwrap();
+        let mut buf = String::new();
+        inv.push_mut_arg(&mut buf).unwrap();
+        let result = inv.call();
+        assert!(result.is_err(), "non-integer length arg should return an error, not panic");
+    }
+
+
+    #[test]
     fn test_call_too_few_args_errors() {
         // Calling with fewer args than declared must return Err.
         let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();

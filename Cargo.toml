@@ -2,6 +2,7 @@
 name = "dyncall"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.80"
 description = "Call functions in dynamic libraries at runtime without compile-time signature knowledge. Wraps libffi for scripting language interpreters and other dynamic dispatch use cases."
 license = "MIT"
 repository = "https://github.com/pm100/dyncall"

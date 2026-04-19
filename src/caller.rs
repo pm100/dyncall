@@ -181,14 +181,11 @@ impl DynCaller {
     }
 
     fn get_lib(&mut self, lib_name: &str) -> Result<DynamicLibrary> {
-        if self.libs.contains_key(lib_name) {
-            return Ok(self.libs.get(lib_name).unwrap().clone());
+        if !self.libs.contains_key(lib_name) {
+            let lib = DynamicLibrary::open(Some(Path::new(lib_name)))?;
+            self.libs.insert(lib_name.to_string(), lib);
         }
-
-        let lib = DynamicLibrary::open(Some(Path::new(lib_name)))?;
-
-        self.libs.insert(lib_name.to_string(), lib);
-        Ok(self.libs.get(lib_name).unwrap().clone())
+        Ok(self.libs[lib_name].clone())
     }
 
     fn get_entry_point(
@@ -249,7 +246,7 @@ impl DynCaller {
         let arg_count = my_arg_types.len();
         let ep = DYNCALLER
             .lock()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .get_entry_point(lib_name, entry_point_name)?;
         let entry_point = unsafe { std::mem::transmute::<*mut ffi::c_void, unsafe extern "C" fn()>(ep) };
         let flag_str = funcdef[4];
@@ -265,7 +262,7 @@ impl DynCaller {
             capture_errno: false,
         };
         let flags = Self::parse_flags(flag_str)?;
-        func.coerce = flags.coerce || DYNCALLER.lock().unwrap().default_coerce;
+        func.coerce = flags.coerce || DYNCALLER.lock().unwrap_or_else(|p| p.into_inner()).default_coerce;
         func.capture_errno = flags.capture_errno;
         unsafe {
             if flags.has_fixed_args {
@@ -310,12 +307,12 @@ impl DynCaller {
     /// // All define_function calls from here on have coerce enabled
     /// ```
     pub fn set_default_coerce(enabled: bool) {
-        DYNCALLER.lock().unwrap().default_coerce = enabled;
+        DYNCALLER.lock().unwrap_or_else(|p| p.into_inner()).default_coerce = enabled;
     }
 
     /// Returns the current process-wide default coerce setting.
     pub fn default_coerce() -> bool {
-        DYNCALLER.lock().unwrap().default_coerce
+        DYNCALLER.lock().unwrap_or_else(|p| p.into_inner()).default_coerce
     }
 
     fn parse_flags(flag_str: &str) -> Result<Flags> {

@@ -13,6 +13,18 @@
 //! 3. Push arguments with [`Invocation::push_arg`] (input) or [`Invocation::push_mut_arg`] (output).
 //! 4. Call with [`Invocation::call`].
 //!
+//! ## Thread safety
+//!
+//! [`DynCaller::define_function`] and [`DynCaller::set_default_coerce`] are safe
+//! to call from multiple threads. Library handles are cached in a global
+//! `LazyLock<Mutex<DynCaller>>`; each call acquires the lock only for the
+//! library-load and symbol-lookup phase, before the `ffi_cif` is prepared.
+//!
+//! [`Invocation`] is **not** `Send` or `Sync` — it must be used on the thread
+//! that created it. Each thread should call [`FuncDef::prep`] independently to
+//! obtain its own `Invocation`.
+//!
+//!
 //! ## Function descriptor format
 //!
 //! ```text

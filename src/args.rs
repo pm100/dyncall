@@ -136,7 +136,9 @@ impl ArgVal {
             F64(ref val) => val as *const _ as *mut c_void,
             I64(ref val) => val as *const _ as *mut c_void,
             Char(ref val) => val as *const _ as *mut c_void,
-            _ => panic!("Unsupported ArgVal variant for payload_ptr"),
+            // Safety: callers (ToArg/ToMutArg impls) must never push CString,
+            // RustString, ByteBuffer, or None into arg_vals directly.
+            _ => unreachable!("ArgVal variant {:?} has no fixed-size FFI payload", self),
         }
     }
 }
@@ -190,7 +192,8 @@ impl ToArg for String {
 
         match &arg_type {
             ArgType::CString => {
-                let cstr = CString::new(self.as_str()).unwrap();
+                let cstr = CString::new(self.as_str())
+                    .map_err(|e| anyhow::anyhow!("String contains an interior nul byte: {}", e))?;
                 let buffer = cstr.as_ptr() as *mut c_void;
                 func.arg_vals.push(ArgVal::Pointer(buffer));
                 func.arg_vals.push(ArgVal::CString(cstr));
@@ -253,7 +256,7 @@ impl ToArg for CStr {
                 func.arg_vals.push(ArgVal::Pointer(p));
                 let pp = &func.arg_vals[func.arg_vals.len() - 1];
                 log::trace!("CStr to_arg ArgVal ptr: {:p}", pp);
-                let ppp = if let ArgVal::Pointer(ref p) = pp { p } else { panic!("Expected Pointer ArgVal") };
+                let ArgVal::Pointer(ref ppp) = pp else { unreachable!() };
                 log::trace!("CStr to_arg final ptr: {:p}", ppp);
                 Ok(ppp as *const *mut c_void as *mut c_void)
             }
@@ -326,6 +329,14 @@ impl_to_arg_float!(f64, F64, F64);
 impl_to_arg_float!(f32, F32, F32);
 impl ToMutArg for ArgVal {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
+        match self {
+            ArgVal::None => bail!("ArgVal::None cannot be passed as a function argument"),
+            ArgVal::CString(_) => bail!("ArgVal::CString cannot be passed directly; use a String or CStr"),
+            ArgVal::RustString(_) | ArgVal::ByteBuffer(_) => {
+                bail!("internal ArgVal variant cannot be passed as a direct argument")
+            }
+            _ => {}
+        }
         func.arg_vals.push(self.clone());
         func.arg_vals.push(self.clone());
         let pp = &func.arg_vals[func.arg_vals.len() - 1];
@@ -334,6 +345,14 @@ impl ToMutArg for ArgVal {
 }
 impl ToArg for ArgVal {
     fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
+        match self {
+            ArgVal::None => bail!("ArgVal::None cannot be passed as a function argument"),
+            ArgVal::CString(_) => bail!("ArgVal::CString cannot be passed directly; use a String or CStr"),
+            ArgVal::RustString(_) | ArgVal::ByteBuffer(_) => {
+                bail!("internal ArgVal variant cannot be passed as a direct argument")
+            }
+            _ => {}
+        }
         func.arg_vals.push(self.clone());
         func.arg_vals.push(self.clone());
         let pp = &func.arg_vals[func.arg_vals.len() - 1];

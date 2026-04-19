@@ -35,7 +35,8 @@ pub fn push_coerced_int(
         }
         ArgType::CString | ArgType::OCString(_) => {
             // integer → string: format as decimal
-            let s = CString::new(val.to_string()).unwrap();
+            // i64::to_string() produces only ASCII digits; can never contain nul.
+            let s = CString::new(val.to_string()).expect("integer decimal string never contains nul");
             let p = s.as_ptr() as *mut c_void;
             func.arg_vals.push(ArgVal::Pointer(p));
             func.arg_vals.push(ArgVal::CString(s));
