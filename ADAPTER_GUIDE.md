@@ -54,12 +54,13 @@ that, script authors can call any C API by name.
 | `ArgType` | `dyncall` | Enum of the declared type of each argument |
 | `ArgVal` | `dyncall` | Enum of runtime argument/return values |
 | `StructValue` | `dyncall` | A flat C struct with field-by-field accessors |
-| `ScriptVal` | `dyncall` | `Number(f64)` or `Str(String)` — the adapter bridge type |
+| `ScriptVal` | `dyncall` | The adapter bridge type — `Number(f64)`, `Integer(i64)`, `Str(String)`, `Pointer(*mut c_void)`, or `Nil` |
+| `ScriptResult` | `dyncall` | Return value of `call_scripted()`: `return_val: ScriptVal` plus `outputs: Vec<(usize, ScriptVal)>` |
 
 Imports you'll almost always need:
 
 ```rust
-use dyncall::{ArgType, ArgVal, DynCaller, FuncDef, ScriptVal, StructValue};
+use dyncall::{ArgType, ArgVal, DynCaller, FuncDef, ScriptVal, ScriptResult, StructValue};
 ```
 
 ---
@@ -71,27 +72,32 @@ to `dyncall` argument types.
 
 ### Single numeric type (BASIC, Lox, JavaScript-style)
 
-If your language represents all numbers as `f64`:
+If your language represents all numbers as `f64`, use `push_script_val` -- no
+per-type match needed:
 
 ```
-f64 number  →  push_arg(&(val as i32)) / push_arg(&val) / …
-              (use the declared ArgType to pick the right cast)
-f64 that is a pointer  →  ArgVal::Pointer(val as usize as *mut c_void)
-String  →  push_arg(&string_value)
+ScriptVal::Number(n)   push all numeric arguments (dyncall handles the cast)
+ScriptVal::Str(s)      push string (cstr/ocstr) arguments
+ScriptVal::Pointer(p)  push opaque pointer arguments
+ScriptVal::Nil         push null or output-only pointer arguments
 ```
 
-With the `coerce` flag on the descriptor (see below) you can skip the per-type
-match and just call `push_arg(&val_as_f64)` — dyncall does the cast internally.
+`push_script_val` inspects the declared `ArgType` and performs the correct
+cast automatically. If f64 represents a pointer value (e.g. BASIC stores
+pointers as numbers), pass it as `ScriptVal::Number(n)` into an `OpaquePointer`
+slot -- the conversion is handled internally.
+
+Alternatively, with the `coerce` flag you can still call `push_arg(&val_as_f64)`
+-- see the coerce section below.
 
 ### Integer stack (Forth, PostScript-style)
 
-If your language uses `i64` on its stack and represents floats as bit-cast
-integers:
+If your language uses `i64` on its stack and represents floats as bit-cast integers:
 
 ```
-i64 (integer semantics)  →  cast to the declared width and call push_arg
-i64 (float semantics)  →  f32::from_bits(val as u32) or f64::from_bits(val as u64)
-strings  →  store in a side Vec<CString>, push the index onto the stack
+i64 (integer semantics)  -> push_script_val(ScriptVal::Integer(val)) handles all widths
+i64 (float semantics)    -> push_arg(&f32::from_bits(val as u32)) or push_arg(&f64::from_bits(val as u64))
+strings                  -> store in a side Vec<CString>, push the index onto the stack
 ```
 
 ### Object / tagged-union model (Lox, Ruby-style)
@@ -99,11 +105,10 @@ strings  →  store in a side Vec<CString>, push the index onto the stack
 If your language has a tagged-union `Value` type:
 
 ```
-Value::Number(f64)   →  push_arg with declared-type cast
-Value::String(s)     →  push_arg(&s) for cstr args
-Value::Nil / other   →  push 0 or return Err
+Value::Number(f64)        -> push_script_val(ScriptVal::Number(n))
+Value::String(s)          -> push_script_val(ScriptVal::Str(s)) for cstr/ocstr args
+Value::Nil / null pointer -> push_script_val(ScriptVal::Nil) or ScriptVal::Pointer(ptr)
 ```
-
 ---
 
 ## Registration: def-time work
@@ -147,56 +152,76 @@ Argument order is the order declared in the descriptor. Use
 
 ### Scalar input arguments
 
-Match on `ArgType` and push the right Rust type:
+**Recommended approach: use `push_script_val`**
+
+For most scripting languages, convert your value to a `ScriptVal` and let
+dyncall handle the type cast:
+
+```rust
+// Number / integer value
+inv.push_script_val(ScriptVal::Number(val_as_f64))?;
+// or for integer-typed languages:
+inv.push_script_val(ScriptVal::Integer(val_as_i64))?;
+
+// String value
+inv.push_script_val(ScriptVal::Str(string_value))?;
+
+// Opaque pointer (null or existing pointer)
+inv.push_script_val(ScriptVal::Pointer(ptr))?;
+inv.push_script_val(ScriptVal::Nil)?;   // null pointer
+```
+
+`push_script_val` inspects the declared `ArgType` from the descriptor and
+performs the appropriate cast. No per-type match is needed in your adapter.
+
+**Low-level approach: `push_arg` with exact types**
+
+If you need precise control (e.g. floats bit-cast as integers in Forth):
 
 ```rust
 match fdef.get_arg_type(i) {
     ArgType::Char  => inv.push_arg(&(val as u8))?,
     ArgType::I16   => inv.push_arg(&(val as i16))?,
-    ArgType::U16   => inv.push_arg(&(val as u16))?,
     ArgType::I32   => inv.push_arg(&(val as i32))?,
-    ArgType::U32   => inv.push_arg(&(val as u32))?,
     ArgType::I64   => inv.push_arg(&(val as i64))?,
-    ArgType::U64   => inv.push_arg(&(val as u64))?,
-    ArgType::F32   => inv.push_arg(&(val as f32))?,
-    ArgType::F64   => inv.push_arg(&val)?,
+    ArgType::F32   => inv.push_arg(&f32::from_bits(val as u32))?,
+    ArgType::F64   => inv.push_arg(&f64::from_bits(val as u64))?,
     ArgType::CString       => inv.push_arg(&string_value)?,
-    ArgType::OpaquePointer => inv.push_arg(&ArgVal::Pointer(val as usize as *mut _))?,
+    ArgType::OpaquePointer => inv.push_arg(&ArgVal::Pointer(ptr))?,
     _ => { /* handled elsewhere */ }
 }
 ```
-
-If you always use the `coerce` flag (recommended for scripting languages — see
-below), you can simplify to:
-
-```rust
-// With coerce flag: push_arg accepts any numeric type and converts automatically
-inv.push_arg(&(val as f64))?;   // i64 or f64 value — coerce handles the rest
-```
-
 ### Output (pointer) arguments
 
-For `*i32`, `*f64`, etc. — the C function writes back through a pointer. You
-must allocate a Rust value, get a mutable reference to it, and recover it after
-the call:
+For `*i32`, `*f64`, etc. -- the C function writes back through a pointer.
+
+**Easy path: `push_script_val` with `call_scripted`**
+
+Push `ScriptVal::Nil` (or an initial value) and use `call_scripted()` to
+get the written-back value from `result.outputs`:
 
 ```rust
-// Allocate a boxed value so its address is stable during the call
+inv.push_script_val(ScriptVal::Nil)?;   // or ScriptVal::Integer(initial)
+let result = inv.call_scripted()?;
+for (arg_index, val) in result.outputs {
+    // val is the value the C function wrote back
+    write_back_to_script_variable(arg_index, val);
+}
+```
+
+**Low-level path: `push_mut_arg` + `call`**
+
+For precise control over the initial value or when not using `call_scripted`:
+
+```rust
 let mut out: Box<i32> = Box::new(initial_value as i32);
 inv.push_mut_arg(out.as_mut())?;
-
-let _ = inv.call()?;
-
-// The C function has written into *out
-let written_back = *out as f64;  // or however your language uses it
+inv.call()?;
+let written_back = *out as f64;
 ```
 
 **Common pitfall:** using a stack variable whose address can change. Always box
 output values or store them in a pre-allocated `Vec`.
-
-If the script provides an initial value for the output slot (e.g. BASIC passes
-a numeric variable by reference), initialise the box with that value so the
-callee sees a sensible starting state.
 
 ### Output string buffers (ocstr)
 
@@ -273,8 +298,11 @@ a `Vec` that outlives the invocation.
 if let ArgVal::StructValue(sv) = &result {
     for fi in 0..sv.field_count() {
         match sv.script_read(fi)? {
-            ScriptVal::Number(n) => store_number(fi, n),
-            ScriptVal::Str(s)    => store_string(fi, s),
+            ScriptVal::Number(n)  => store_number(fi, n),
+            ScriptVal::Integer(n) => store_number(fi, n as f64),
+            ScriptVal::Str(s)     => store_string(fi, s),
+            ScriptVal::Pointer(p) => store_pointer(fi, p),
+            ScriptVal::Nil        => store_number(fi, 0.0),
         }
     }
 }
@@ -287,14 +315,36 @@ if let Some(sv) = get_struct_slot(i) {
 }
 ```
 
-`script_read` always returns `ScriptVal::Number(f64)` for numeric fields and
-`ScriptVal::Str(String)` for `cstr` fields — no need to know the underlying C
-type.
+`script_read` returns `ScriptVal::Number(f64)` or `ScriptVal::Integer(i64)` for
+numeric fields, `ScriptVal::Str(String)` for `cstr` fields, `ScriptVal::Pointer`
+for pointer fields, and `ScriptVal::Nil` for null/void fields.
 
 ### Making the call and reading the result
 
+**Recommended: `call_scripted()` for non-struct returns**
+
 ```rust
-let result = inv.call()?;   // or inv.call_and_return() for more control
+let result: ScriptResult = inv.call_scripted()?;
+// result.return_val is a ScriptVal (Number, Integer, Str, Pointer, or Nil)
+// result.outputs contains (arg_index, ScriptVal) for each output-pointer arg
+match result.return_val {
+    ScriptVal::Number(n)   => push_float(n),
+    ScriptVal::Integer(n)  => push_int(n),
+    ScriptVal::Str(s)      => push_string(s),
+    ScriptVal::Pointer(p)  => push_pointer(p),
+    ScriptVal::Nil         => push_nil(),
+}
+for (arg_index, val) in result.outputs {
+    write_back_to_script_variable(arg_index, val);
+}
+```
+
+`call_scripted()` returns `Err` for struct-returning functions (use `call()` then).
+
+**Low-level: `call()` for full control or struct returns**
+
+```rust
+let result = inv.call()?;
 
 match fdef.get_return_type() {
     ArgType::Void          => { /* no return value */ }
@@ -307,9 +357,8 @@ match fdef.get_return_type() {
 }
 ```
 
-The return value accessor names mirror the type tokens: `as_i32()`, `as_u64()`,
-`as_f32()`, `as_f64()`, `as_pointer()`, `as_struct_value()`, …
-
+The `ArgVal` accessor names mirror the type tokens: `as_i32()`, `as_u64()`,
+`as_f32()`, `as_f64()`, `as_pointer()`, `as_struct_value()`, ...
 ---
 
 ## The coerce flag
@@ -407,7 +456,7 @@ let mut invoke = fdef.prep();
 let mut struct_slots: Vec<Option<StructValue>> = vec![None; arg_count];
 for i in 0..arg_count {
     let arg_type = fdef.get_arg_type(i);
-    if matches!(arg_type, ArgType::Struct(_) | ArgType::Pointer(_)) {
+    if arg_type.struct_type().is_some() {
         let array = self.arrays.get(array_name_for_arg(i)).unwrap();
         let script_vals: Vec<ScriptVal> = array.data.iter().map(|v| match v {
             Value::Number(n) => ScriptVal::Number(*n),
@@ -420,39 +469,40 @@ for i in 0..arg_count {
 
 // Push each argument in declaration order
 for (i, val) in arg_values.into_iter().enumerate() {
-    match fdef.get_arg_type(i) {
-        ArgType::Struct(_) => invoke.push_arg(struct_slots[i].as_ref().unwrap())?,
-        ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
-            invoke.push_mut_arg(struct_slots[i].as_mut().unwrap())?
+    let arg_type = fdef.get_arg_type(i);
+    if let Some(_) = arg_type.struct_type() {
+        // Struct or pointer-to-struct
+        if arg_type.is_struct_ptr() {
+            invoke.push_mut_arg(struct_slots[i].as_mut().unwrap())?;
+        } else {
+            invoke.push_arg(struct_slots[i].as_ref().unwrap())?;
         }
-        ArgType::Pointer(_) => {
-            // output numeric — pre-allocated box, address stable during call
-            invoke.push_mut_arg(&mut out_num_box)?;
-        }
-        ArgType::OCString(_) => invoke.push_mut_arg(&mut out_string)?,
-        _ => match val {
-            Value::Number(n) => invoke.push_arg(&(n as i64))?,   // coerce flag handles the rest
-            Value::String(s) => invoke.push_arg(&s)?,
+    } else {
+        // Scalar: push_script_val handles type coercion for us
+        match val {
+            Value::Number(n) => invoke.push_script_val(ScriptVal::Number(n))?,
+            Value::String(s) => invoke.push_script_val(ScriptVal::Str(s))?,
         }
     }
 }
 
-let ret = invoke.call()?;
+// For non-struct returns, call_scripted gives us a ScriptVal directly
+let is_struct_return = matches!(fdef.get_return_type(), ArgType::Struct(_))
+    || matches!(fdef.get_return_type(), ArgType::Pointer(inner) if inner.is_struct_type());
 
-// Write pointer-to-struct fields back into the BASIC array
-for (i, slot) in struct_slots.iter().enumerate() {
-    if matches!(fdef.get_arg_type(i), ArgType::Pointer(_)) {
-        if let Some(sv) = slot {
-            for fi in 0..sv.field_count() {
-                if let ScriptVal::Number(n) = sv.script_read(fi)? {
-                    basic_array[fi] = Value::Number(n);
-                }
-            }
-        }
+if is_struct_return {
+    let ret = invoke.call()?;
+    // ... handle ArgVal::StructValue
+} else {
+    let result = invoke.call_scripted()?;
+    // result.return_val is already a ScriptVal
+    // result.outputs contains written-back output pointer values
+    for (arg_index, val) in result.outputs {
+        write_back_to_script_variable(arg_index, val);
     }
+    push_return_value(result.return_val);
 }
 ```
-
 **Struct return** — BASIC stores a `Token::Struct` and makes field access via
 array subscript syntax, e.g. `result(2)`:
 
@@ -530,17 +580,20 @@ pub fn dispatch(func_def: &FuncDef, forth: &mut Forth) -> Result<(), Error> {
         } else {
             let val = raw[offset];
             match arg_type {
-                ArgType::I32           => inv.push_arg(&(val as i32))?,
-                ArgType::I64           => inv.push_arg(&val)?,
-                ArgType::F32           => inv.push_arg(&f32::from_bits(val as u32))?,
-                ArgType::F64           => inv.push_arg(&f64::from_bits(val as u64))?,
+                // Integer types: push_script_val handles all width casts
+                ArgType::Char | ArgType::I16 | ArgType::U16
+                | ArgType::I32 | ArgType::U32 | ArgType::I64 | ArgType::U64 =>
+                    inv.push_script_val(ScriptVal::Integer(val))?,
+                // Floats are bit-cast integers on the Forth stack
+                ArgType::F32 => inv.push_arg(&f32::from_bits(val as u32))?,
+                ArgType::F64 => inv.push_arg(&f64::from_bits(val as u64))?,
                 ArgType::CString       => {
                     // val is an index into forth.strings
                     let cstr = &forth.strings[val as usize];
                     inv.push_arg(cstr.as_c_str())?;
                 }
                 ArgType::OpaquePointer => {
-                    inv.push_arg(&ArgVal::Pointer(val as usize as *mut _))?;
+                    inv.push_script_val(ScriptVal::Pointer(val as usize as *mut _))?;
                 }
                 _ => inv.push_arg(&val)?,
             }
@@ -554,7 +607,10 @@ pub fn dispatch(func_def: &FuncDef, forth: &mut Forth) -> Result<(), Error> {
     if let ArgVal::StructValue(sv) = &result {
         for fi in 0..sv.field_count() {
             match sv.script_read(fi)? {
-                ScriptVal::Number(n) => forth.stack_push(n as i64),
+                ScriptVal::Number(n)  => forth.stack_push(n as i64),
+                ScriptVal::Integer(n) => forth.stack_push(n),
+                ScriptVal::Pointer(p) => forth.stack_push(p as usize as i64),
+                ScriptVal::Nil        => forth.stack_push(0),
                 ScriptVal::Str(s) => {
                     let idx = forth.strings.len();
                     forth.strings.push(CString::new(s)?);
@@ -631,8 +687,11 @@ fields[idx] = new_val;
 sv.reset();
 for field in &fields {
     match field {
-        ScriptVal::Number(n) => sv.push_field_coerced(n)?,
-        ScriptVal::Str(_)    => sv.push_field_coerced(&0.0f64)?,  // cstr: write null
+        ScriptVal::Number(n)  => sv.push_field_coerced(n)?,
+        ScriptVal::Integer(n) => sv.push_field_coerced(n)?,
+        ScriptVal::Pointer(p) => sv.push_field_coerced(&(*p as i64))?,
+        ScriptVal::Nil        => sv.push_field_coerced(&0i64)?,
+        ScriptVal::Str(_)     => sv.push_field_coerced(&0.0f64)?,  // cstr: write null
     }
 }
 ```
@@ -655,19 +714,20 @@ Use this list when writing a new adapter.
 
 ### Per-argument marshaling
 
-- [ ] Scalar inputs: match `ArgType`, cast to the right Rust primitive, call `push_arg`
-- [ ] Pointer outputs (`*i32`, etc.): box the value, call `push_mut_arg`, read back after call
-- [ ] String inputs (`cstr`): call `push_arg(&string)`
-- [ ] String outputs (`ocstr`): call `push_mut_arg(&mut string)`, read back after call
-- [ ] Struct inputs (`{...}`): build `StructValue` via `from_script_vals`, call `push_arg`
-- [ ] Struct pointer inputs (`*{...}`): build `StructValue`, call `push_mut_arg`, write fields back
-- [ ] Consider using the `coerce` flag to simplify numeric marshaling
+- [ ] Scalar inputs: call `push_script_val(ScriptVal::Number(n))` or `ScriptVal::Integer(n)` -- no per-type match needed
+- [ ] String inputs (`cstr`/`ocstr`): call `push_script_val(ScriptVal::Str(s))`
+- [ ] Pointer outputs (`*i32`, etc.): call `push_script_val(ScriptVal::Nil)`, read back from `result.outputs`
+- [ ] Opaque pointers: call `push_script_val(ScriptVal::Pointer(ptr))` or `ScriptVal::Nil`
+- [ ] Struct inputs (`{...}`): build `StructValue` via `from_script_vals`, call `push_arg` (unchanged)
+- [ ] Struct pointer inputs (`*{...}`): build `StructValue`, call `push_mut_arg`, write fields back (unchanged)
+- [ ] Consider using the `coerce` flag if you prefer `push_arg(&val_as_f64)` style
 
 ### Return value handling
 
-- [ ] Scalar: use `result.as_i32()`, `as_f64()`, `as_pointer()`, etc.
-- [ ] Struct return: check `ArgVal::StructValue(sv)`, iterate with `sv.script_read(fi)`
-- [ ] Void: no return value to push
+- [ ] Non-struct: use `call_scripted()` and match on `result.return_val` (`ScriptVal` variants)
+- [ ] Output args: iterate `result.outputs` to get written-back values
+- [ ] Struct return: use `call()` directly; check `ArgVal::StructValue(sv)`, iterate with `sv.script_read(fi)`
+- [ ] Void: `result.return_val` will be `ScriptVal::Nil`
 
 ### Robustness
 

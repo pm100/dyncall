@@ -13,6 +13,40 @@ use crate::{
     args::{ArgType, LengthDef, ToArg, ToMutArg},
     ArgVal, FuncDef,
 };
+use crate::structs::ScriptVal;
+
+/// Private storage for a boxed output slot created by [`Invocation::push_script_val`].
+pub(crate) enum ScriptOutputSlot {
+    Char(Box<u8>),
+    I16(Box<i16>),
+    U16(Box<u16>),
+    I32(Box<i32>),
+    U32(Box<u32>),
+    I64(Box<i64>),
+    U64(Box<u64>),
+    F32(Box<f32>),
+    F64(Box<f64>),
+    Ptr(Box<*mut c_void>),
+    OcString(Box<String>),
+}
+
+impl ScriptOutputSlot {
+    fn to_script_val(&self) -> ScriptVal {
+        match self {
+            Self::Char(v) => ScriptVal::Integer(**v as i64),
+            Self::I16(v) => ScriptVal::Integer(**v as i64),
+            Self::U16(v) => ScriptVal::Integer(**v as i64),
+            Self::I32(v) => ScriptVal::Integer(**v as i64),
+            Self::U32(v) => ScriptVal::Integer(**v as i64),
+            Self::I64(v) => ScriptVal::Integer(**v),
+            Self::U64(v) => ScriptVal::Integer(**v as i64),
+            Self::F32(v) => ScriptVal::Number(**v as f64),
+            Self::F64(v) => ScriptVal::Number(**v),
+            Self::Ptr(v) => ScriptVal::from(**v),
+            Self::OcString(v) => ScriptVal::Str(*v.clone()),
+        }
+    }
+}
 
 /// Read the C `errno` value for the current thread.
 /// Must be called immediately after a foreign function returns.
@@ -48,6 +82,8 @@ pub struct Invocation<'a> {
     pub(crate) arg_ptrs: Vec<*mut c_void>,
     pub(crate) arg_vals: Vec<ArgVal>,
     pub(crate) last_errno: Option<i32>,
+    /// Output slots allocated by push_script_val; (arg_index, slot).
+    pub(crate) script_output_slots: Vec<(usize, ScriptOutputSlot)>,
 }
 impl<'a> Invocation<'a> {
     /// Push an input argument.
@@ -120,28 +156,118 @@ impl<'a> Invocation<'a> {
         self.func_def.arg_types.len()
     }
 
-    /// Push the next argument, coercing `value` from `f64` to the declared type.
+    /// Push the next argument using a [`ScriptVal`].
     ///
-    /// Useful for language runtimes that represent all numbers as `f64`
-    /// (e.g. BASIC, Lox).  The declared type drives the conversion — integers
-    /// are truncated via `as` cast, floats are narrowed.
-    pub fn push_arg_f64(&mut self, value: f64) -> Result<()> {
+    /// This is the primary API for scripting-language adapters. The declared
+    /// [`ArgType`] drives all type conversion — you do not need to inspect it
+    /// yourself.
+    ///
+    /// - Scalar input types (`i8`–`f64`): coerced from `Number`/`Integer`.
+    /// - `cstr`: extracted from `Str`.
+    /// - `ocstr`: buffer allocated from `Str` content; written back via
+    ///   [`ScriptResult::outputs`] after [`call_scripted`](Invocation::call_scripted).
+    /// - `ptr` (opaque pointer): extracted from `Pointer` or `Nil`.
+    /// - `*T` (output pointer): boxed from the initial value; written back via
+    ///   [`ScriptResult::outputs`] after [`call_scripted`](Invocation::call_scripted).
+    /// - Struct args (`{…}` / `*{…}`): return an error — use
+    ///   [`push_arg`](Invocation::push_arg) with a [`StructValue`] directly.
+    pub fn push_script_val(&mut self, val: ScriptVal) -> Result<()> {
         self.check_arg_count()?;
-        let declared = self.func_def.arg_types[self.arg_ptrs.len()].clone();
+        let arg_index = self.arg_ptrs.len();
+        let declared = self.func_def.arg_types[arg_index].clone();
         let val_count = self.arg_vals.len();
-        let argp = crate::coerce::push_coerced_float(self, value, &declared)?;
-        self.finish_push(argp, val_count)
-    }
 
-    /// Push the next argument, coercing `value` from `i64` to the declared type.
-    ///
-    /// Useful for language runtimes that represent all numbers as `i64`
-    /// (e.g. Forth).  The declared type drives the conversion.
-    pub fn push_arg_i64(&mut self, value: i64) -> Result<()> {
-        self.check_arg_count()?;
-        let declared = self.func_def.arg_types[self.arg_ptrs.len()].clone();
-        let val_count = self.arg_vals.len();
-        let argp = crate::coerce::push_coerced_int(self, value, &declared)?;
+        let argp = match &declared {
+            // ── output pointer *T ─────────────────────────────────────────
+            // The C function receives a pointer to T and writes through it.
+            // We box the initial value, store the box in script_output_slots,
+            // and push ArgVal::Pointer(ptr_to_T) twice so pre_process / payload_ptr
+            // work correctly.
+            ArgType::Pointer(inner) if !matches!(inner.as_ref(), ArgType::Struct(_)) => {
+                // Helper macro: box an initial value, push it, record the slot.
+                macro_rules! push_out_slot {
+                    ($ty:ty, $variant:ident, $init:expr) => {{
+                        let mut b: Box<$ty> = Box::new($init);
+                        let ptr_to_val = b.as_mut() as *mut $ty as *mut c_void;
+                        self.arg_vals.push(ArgVal::Pointer(ptr_to_val));
+                        self.arg_vals.push(ArgVal::Pointer(ptr_to_val));
+                        // payload_ptr() of the second entry = &inner_ptr in arg_vals[val_count+1]
+                        let argp = self.arg_vals[val_count + 1].payload_ptr();
+                        self.script_output_slots.push((arg_index, ScriptOutputSlot::$variant(b)));
+                        argp
+                    }};
+                }
+                match inner.as_ref() {
+                    ArgType::Char         => push_out_slot!(u8,  Char, script_val_as_u8(&val)),
+                    ArgType::I16          => push_out_slot!(i16, I16,  script_val_as_i64(&val) as i16),
+                    ArgType::U16          => push_out_slot!(u16, U16,  script_val_as_i64(&val) as u16),
+                    ArgType::I32          => push_out_slot!(i32, I32,  script_val_as_i64(&val) as i32),
+                    ArgType::U32          => push_out_slot!(u32, U32,  script_val_as_i64(&val) as u32),
+                    ArgType::I64          => push_out_slot!(i64, I64,  script_val_as_i64(&val)),
+                    ArgType::U64          => push_out_slot!(u64, U64,  script_val_as_i64(&val) as u64),
+                    ArgType::F32          => push_out_slot!(f32, F32,  script_val_as_f64(&val) as f32),
+                    ArgType::F64          => push_out_slot!(f64, F64,  script_val_as_f64(&val)),
+                    ArgType::OpaquePointer => push_out_slot!(*mut c_void, Ptr, script_val_as_ptr(&val)),
+                    other => bail!("push_script_val: unsupported output pointer inner type {:?}", other),
+                }
+            }
+            // ── OCString output buffer ────────────────────────────────────
+            // Pattern mirrors ToMutArg for String:
+            //   arg_vals[i*2]   = Pointer(buf_ptr)  — updated by pre_process_ocstring
+            //   arg_vals[i*2+1] = RustString(str_ptr) — used by post_process_args
+            //   arg_ptrs[i]     = payload_ptr() of arg_vals[i*2]
+            ArgType::OCString(_) => {
+                let init = match &val {
+                    ScriptVal::Str(s) => s.clone(),
+                    _ => String::new(),
+                };
+                let mut b: Box<String> = Box::new(init);
+                // Initial data pointer (pre_process will update after reserve).
+                let buf_ptr = b.as_mut_ptr() as *mut c_void;
+                // Pointer to the String struct itself (for post_process_args).
+                let str_ptr: *mut String = &mut *b;
+                self.arg_vals.push(ArgVal::Pointer(buf_ptr));
+                self.arg_vals.push(ArgVal::RustString(str_ptr));
+                let argp = self.arg_vals[val_count].payload_ptr();
+                // Move b into the slot AFTER getting the raw pointers above.
+                self.script_output_slots.push((arg_index, ScriptOutputSlot::OcString(b)));
+                argp
+            }
+            // ── opaque pointer input ──────────────────────────────────────
+            ArgType::OpaquePointer => {
+                let p: *mut c_void = match &val {
+                    ScriptVal::Pointer(p) => *p,
+                    ScriptVal::Integer(n) => *n as usize as *mut c_void,
+                    ScriptVal::Number(f) => *f as i64 as usize as *mut c_void,
+                    ScriptVal::Nil => ptr::null_mut(),
+                    other => bail!("push_script_val: cannot push {:?} for ptr arg", other),
+                };
+                self.arg_vals.push(ArgVal::Pointer(p));
+                self.arg_vals.push(ArgVal::Pointer(p));
+                self.arg_vals[val_count + 1].payload_ptr()
+            }
+            // ── cstr input ────────────────────────────────────────────────
+            ArgType::CString => {
+                let s = match val {
+                    ScriptVal::Str(s) => s,
+                    ScriptVal::Nil => String::new(),
+                    other => bail!("push_script_val: expected Str for cstr arg, got {:?}", other),
+                };
+                // to_arg for String handles the CString allocation; returns payload_ptr.
+                s.to_arg(self)?
+            }
+            // ── struct — not supported via ScriptVal ──────────────────────
+            ArgType::Struct(_) | ArgType::Pointer(_) => {
+                bail!("push_script_val: struct arguments must use push_arg with a StructValue");
+            }
+            // ── scalar numeric ────────────────────────────────────────────
+            _ => match &val {
+                ScriptVal::Number(n) => crate::coerce::push_coerced_float(self, *n, &declared)?,
+                ScriptVal::Integer(n) => crate::coerce::push_coerced_int(self, *n, &declared)?,
+                ScriptVal::Nil => crate::coerce::push_coerced_int(self, 0, &declared)?,
+                other => bail!("push_script_val: cannot push {:?} for scalar arg {:?}", other, declared),
+            },
+        };
         self.finish_push(argp, val_count)
     }
 
@@ -347,5 +473,134 @@ impl<'a> Invocation<'a> {
                 _ => {}
             }
         }
+    }
+}
+
+// ── ScriptVal helpers ─────────────────────────────────────────────────────────
+
+fn script_val_as_i64(v: &ScriptVal) -> i64 {
+    match v {
+        ScriptVal::Integer(n) => *n,
+        ScriptVal::Number(f) => *f as i64,
+        ScriptVal::Nil => 0,
+        _ => 0,
+    }
+}
+
+fn script_val_as_f64(v: &ScriptVal) -> f64 {
+    match v {
+        ScriptVal::Number(f) => *f,
+        ScriptVal::Integer(n) => *n as f64,
+        ScriptVal::Nil => 0.0,
+        _ => 0.0,
+    }
+}
+
+fn script_val_as_u8(v: &ScriptVal) -> u8 {
+    script_val_as_i64(v) as u8
+}
+
+fn script_val_as_ptr(v: &ScriptVal) -> *mut c_void {
+    match v {
+        ScriptVal::Pointer(p) => *p,
+        _ => ptr::null_mut(),
+    }
+}
+
+// ── ScriptResult ──────────────────────────────────────────────────────────────
+
+/// Result of a [`call_scripted`](Invocation::call_scripted) invocation.
+///
+/// Contains the function's return value and any values written back through
+/// output-pointer arguments that were pushed with
+/// [`push_script_val`](Invocation::push_script_val).
+#[derive(Debug)]
+pub struct ScriptResult {
+    /// Return value of the foreign function.
+    ///
+    /// - Numeric return types → [`ScriptVal::Integer`] (for all integer types)
+    ///   or [`ScriptVal::Number`] (for `f32`/`f64`).
+    /// - `cstr` → [`ScriptVal::Str`].
+    /// - `ptr` → [`ScriptVal::Pointer`] or [`ScriptVal::Nil`] (if null).
+    /// - `void` → [`ScriptVal::Nil`].
+    /// - Struct return types → not supported via `call_scripted`; use
+    ///   [`call`](Invocation::call) instead.
+    pub return_val: ScriptVal,
+    /// Written-back values for each output-pointer argument.
+    ///
+    /// Each entry is `(arg_index, value)` where `arg_index` is the zero-based
+    /// position of the argument in the function's parameter list.  Entries
+    /// appear in push order (ascending `arg_index`).
+    pub outputs: Vec<(usize, ScriptVal)>,
+}
+
+impl<'a> Invocation<'a> {
+    /// Execute the call and return the result as a [`ScriptResult`].
+    ///
+    /// This is the high-level counterpart to [`call`](Invocation::call).
+    /// It reads back all output-pointer slots that were pushed with
+    /// [`push_script_val`](Invocation::push_script_val) and converts the
+    /// return value to a [`ScriptVal`].
+    ///
+    /// # Errors
+    /// - If fewer arguments have been pushed than declared.
+    /// - If the function returns a struct (use [`call`](Invocation::call) for
+    ///   struct returns).
+    pub fn call_scripted(&mut self) -> Result<ScriptResult> {
+        let return_type = self.func_def.return_type.clone();
+
+        let ret_arg_val = self.call()?;
+
+        // Convert return ArgVal → ScriptVal
+        let return_val = match &return_type {
+            ArgType::F32 => {
+                if let ArgVal::F32(v) = ret_arg_val { ScriptVal::Number(v as f64) }
+                else { ScriptVal::Nil }
+            }
+            ArgType::F64 => {
+                if let ArgVal::F64(v) = ret_arg_val { ScriptVal::Number(v) }
+                else { ScriptVal::Nil }
+            }
+            ArgType::CString => {
+                if let ArgVal::RustString(p) = ret_arg_val {
+                    let s = unsafe { Box::from_raw(p) };
+                    ScriptVal::Str(*s)
+                } else {
+                    ScriptVal::Nil
+                }
+            }
+            ArgType::OpaquePointer | ArgType::Pointer(_) => {
+                if let ArgVal::Pointer(p) = ret_arg_val {
+                    ScriptVal::from(p)
+                } else {
+                    ScriptVal::Nil
+                }
+            }
+            ArgType::Struct(_) => {
+                bail!("call_scripted: struct return types are not supported; use call()");
+            }
+            _ => {
+                // All integer-ish types
+                match ret_arg_val {
+                    ArgVal::Char(v)  => ScriptVal::Integer(v as i64),
+                    ArgVal::I16(v)   => ScriptVal::Integer(v as i64),
+                    ArgVal::U16(v)   => ScriptVal::Integer(v as i64),
+                    ArgVal::I32(v)   => ScriptVal::Integer(v as i64),
+                    ArgVal::U32(v)   => ScriptVal::Integer(v as i64),
+                    ArgVal::I64(v)   => ScriptVal::Integer(v),
+                    ArgVal::U64(v)   => ScriptVal::Integer(v as i64),
+                    ArgVal::None     => ScriptVal::Nil,
+                    _                => ScriptVal::Nil,
+                }
+            }
+        };
+
+        // Drain the output slots (call() cleared arg_vals but not these).
+        let outputs = self.script_output_slots
+            .drain(..)
+            .map(|(idx, slot)| (idx, slot.to_script_val()))
+            .collect();
+
+        Ok(ScriptResult { return_val, outputs })
     }
 }

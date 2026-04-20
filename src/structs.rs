@@ -512,14 +512,17 @@ impl StructValue {
     /// Build a [`StructValue`] from a slice of [`ScriptVal`]s.
     ///
     /// Each element is coerced to the declared field type.  Adapters convert
-    /// their native number type (f64, i64, …) to `ScriptVal::Number` before
-    /// calling this.
+    /// their native number type (f64, i64, …) to `ScriptVal::Number` or
+    /// `ScriptVal::Integer` before calling this.
     pub fn from_script_vals(arg_type: &ArgType, vals: &[ScriptVal]) -> Result<Self> {
         let mut sv = StructValue::new(arg_type)?;
         for val in vals {
             match val {
                 ScriptVal::Number(n) => sv.push_field_coerced(n)?,
+                ScriptVal::Integer(n) => sv.push_field_coerced(n)?,
                 ScriptVal::Str(_) => sv.push_field_coerced(&0.0f64)?,
+                ScriptVal::Pointer(p) => sv.push_field(p)?,
+                ScriptVal::Nil => sv.push_field_coerced(&0i64)?,
             }
         }
         Ok(sv)
@@ -528,24 +531,71 @@ impl StructValue {
     /// Read field `index` as a [`ScriptVal`].
     ///
     /// For `cstr` fields the stored pointer is followed to produce an owned
-    /// `String`. All other numeric field types are widened to `f64`.
+    /// `String`. Pointer fields return `ScriptVal::Pointer` (or `Nil` if null).
+    /// All other numeric field types are widened to `f64` as `ScriptVal::Number`.
     pub fn script_read(&self, index: usize) -> Result<ScriptVal> {
-        if let Ok(s) = self.read_field::<String>(index) {
-            return Ok(ScriptVal::Str(s));
+        let field_type = self.layout.fields.get(index)
+            .map(|f| &f.arg_type)
+            .ok_or_else(|| anyhow::anyhow!("field index {} out of range", index))?;
+        match field_type {
+            ArgType::CString => {
+                if let Ok(s) = self.read_field::<String>(index) {
+                    return Ok(ScriptVal::Str(s));
+                }
+                Ok(ScriptVal::Nil)
+            }
+            ArgType::OpaquePointer => {
+                let p = self.read_field::<*mut c_void>(index)?;
+                Ok(ScriptVal::from(p))
+            }
+            _ => {
+                let n = self.read_field_coerced::<f64>(index)?;
+                Ok(ScriptVal::Number(n))
+            }
         }
-        let n = self.read_field_coerced::<f64>(index)?;
-        Ok(ScriptVal::Number(n))
     }
 }
 
-/// A dynamically-typed field value for use by scripting-language adapters.
+/// A dynamically-typed value for use by scripting-language adapters.
 ///
-/// Returned by [`StructValue::script_read`] and accepted by constructors like
-/// [`StructValue::from_script_vals`].
-#[derive(Debug, Clone)]
+/// Used with [`Invocation::push_script_val`] to push arguments and returned
+/// by [`Invocation::call_scripted`] for return values and output-pointer
+/// writebacks.  Also accepted by [`StructValue::from_script_vals`] and
+/// returned by [`StructValue::script_read`].
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScriptVal {
-    /// Numeric field (all integer and float types are widened to `f64`).
+    /// Numeric value — floats and small integers (BASIC, Lox, JS-style runtimes).
+    /// All integer and float C types are widened to `f64` on read.
     Number(f64),
-    /// String field (`cstr` pointer followed to produce an owned string).
+    /// Integer value without float precision loss (Forth, PostScript-style runtimes).
+    /// Preferred over `Number` when the runtime uses `i64` as its stack type.
+    Integer(i64),
+    /// String value (`cstr` pointer followed to produce an owned `String`).
     Str(String),
+    /// Opaque pointer (`void *`, `FILE *`, `HANDLE`, …).
+    Pointer(*mut c_void),
+    /// Null pointer, void return, or zero / absent value.
+    Nil,
+}
+
+impl From<f64> for ScriptVal {
+    fn from(v: f64) -> Self { ScriptVal::Number(v) }
+}
+
+impl From<i64> for ScriptVal {
+    fn from(v: i64) -> Self { ScriptVal::Integer(v) }
+}
+
+impl From<String> for ScriptVal {
+    fn from(v: String) -> Self { ScriptVal::Str(v) }
+}
+
+impl From<&str> for ScriptVal {
+    fn from(v: &str) -> Self { ScriptVal::Str(v.to_string()) }
+}
+
+impl From<*mut c_void> for ScriptVal {
+    fn from(v: *mut c_void) -> Self {
+        if v.is_null() { ScriptVal::Nil } else { ScriptVal::Pointer(v) }
+    }
 }

@@ -56,6 +56,7 @@ impl FuncDef {
             arg_ptrs: Vec::with_capacity(self.arg_types.len()),
             arg_vals: Vec::with_capacity(self.arg_types.len() * 4),
             last_errno: None,
+            script_output_slots: Vec::new(),
         }
     }
     /// Returns the number of declared arguments.

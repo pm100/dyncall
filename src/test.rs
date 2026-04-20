@@ -1081,4 +1081,75 @@ mod test {
         // Silence unused import
         let _ = ArgVal::None;
     }
+
+    // ── push_script_val / call_scripted tests ─────────────────────────────────
+
+    /// push_script_val with Str coerces to cstr, Integer return works.
+    #[test]
+    fn test_push_script_val_scalar() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("42".to_string())).unwrap();
+        let result = inv.call_scripted().unwrap();
+        assert_eq!(result.return_val, ScriptVal::Integer(42));
+        assert!(result.outputs.is_empty());
+    }
+
+    /// push_script_val with Str + atof — Number return.
+    #[test]
+    fn test_push_script_val_float_return() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|atof|cstr|f64|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("3.14".to_string())).unwrap();
+        let result = inv.call_scripted().unwrap();
+        if let ScriptVal::Number(f) = result.return_val {
+            assert!((f - 3.14).abs() < 0.01, "expected ~3.14, got {f}");
+        } else {
+            panic!("expected Number, got {:?}", result.return_val);
+        }
+    }
+
+    /// push_script_val for an output pointer (*i32) — writeback via outputs.
+    #[test]
+    fn test_push_script_val_output_ptr() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(
+            &format!("{LIBC}|sscanf|cstr,cstr,*i32|i32|")
+        ).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("99".to_string())).unwrap();
+        inv.push_script_val(ScriptVal::Str("%d".to_string())).unwrap();
+        inv.push_script_val(ScriptVal::Integer(0)).unwrap();
+        let result = inv.call_scripted().unwrap();
+        assert_eq!(result.return_val, ScriptVal::Integer(1)); // 1 item read
+        assert_eq!(result.outputs.len(), 1);
+        let (idx, val) = &result.outputs[0];
+        assert_eq!(*idx, 2);
+        assert_eq!(*val, ScriptVal::Integer(99));
+    }
+
+    /// call_scripted returns Nil for void-return functions.
+    #[test]
+    fn test_call_scripted_void_return() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|srand|u32|void|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Integer(42)).unwrap();
+        let result = inv.call_scripted().unwrap();
+        assert_eq!(result.return_val, ScriptVal::Nil);
+    }
+
+    /// push_script_val with Number coerces into integer C type.
+    #[test]
+    fn test_push_script_val_number_to_int() {
+        use crate::ScriptVal;
+        // abs(i32) -> i32
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Number(-7.0)).unwrap();
+        let result = inv.call_scripted().unwrap();
+        assert_eq!(result.return_val, ScriptVal::Integer(7));
+    }
 }
