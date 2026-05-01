@@ -7,6 +7,9 @@ functions at runtime without writing any Rust FFI code themselves.
 ## Contents
 
 - [What dyncall does for you](#what-dyncall-does-for-you)
+- [Integration strategies](#integration-strategies)
+  - [Extension / plugin (no interpreter changes)](#extension--plugin-no-interpreter-changes)
+  - [Fork / modification (source changes required)](#fork--modification-source-changes-required)
 - [Core types](#core-types)
 - [Mapping your language's value model](#mapping-your-languages-value-model)
 - [Registration: def-time work](#registration-def-time-work)
@@ -14,6 +17,7 @@ functions at runtime without writing any Rust FFI code themselves.
   - [Scalar input arguments](#scalar-input-arguments)
   - [Output (pointer) arguments](#output-pointer-arguments)
   - [Output string buffers (ocstr)](#output-string-buffers-ocstr)
+  - [Raw byte buffers (buff / obuff)](#raw-byte-buffers-buff--obuff)
   - [Struct arguments](#struct-arguments)
   - [Making the call and reading the result](#making-the-call-and-reading-the-result)
 - [The coerce flag](#the-coerce-flag)
@@ -41,6 +45,79 @@ function whose signature is not known at compile time:
 and the `push_arg` / `push_mut_arg` / `push_field` calls that `dyncall`
 expects. That layer is typically 100–300 lines of Rust, written once. After
 that, script authors can call any C API by name.
+
+---
+
+## Integration strategies
+
+Before writing any glue code, decide how to connect the adapter to the
+interpreter. There are two approaches.
+
+### Extension / plugin (no interpreter changes)
+
+Some interpreters — notably embeddable engines like
+[Boa](https://boajs.dev/) (JavaScript) and [Rhai](https://rhai.rs/) — provide
+a public API for registering native functions and types at runtime. With these
+you write a **separate library crate** that contains only the adapter glue; the
+interpreter source is never forked or modified.
+
+**Boa example** (`boa_dyncall` crate):
+
+```rust
+// One call at startup installs exfun() and ExStruct into the JS context.
+pub fn register_dyncall(context: &mut Context) {
+    context.register_global_class::<ExStruct>().unwrap();
+    context.register_global_builtin_callable(
+        js_string!("exfun"), 1,
+        NativeFunction::from_fn_ptr(|_this, args, ctx| {
+            let descriptor = args.get_or_undefined(0).to_string(ctx)?.to_std_string_escaped();
+            let fdef = DynCaller::define_function(&descriptor)
+                .map_err(|e| js_err(format!("exfun: {e}")))?;
+            // Wrap fdef in a closure and return it as a callable JS value.
+            // ...
+        }),
+    ).unwrap();
+}
+```
+
+JavaScript then calls native functions with no C bindings:
+
+```js
+const abs = exfun("msvcrt.dll|abs|i32|i32|");
+console.log(abs(-42));   // 42
+```
+
+**When to use this approach:**
+- The interpreter has a native-extension / plugin API.
+- You want dyncall support to be an opt-in dependency that doesn't touch the interpreter.
+- You do not control or want to fork the interpreter source.
+
+### Fork / modification (source changes required)
+
+Interpreters without a suitable extension API — BASIC, Forth, Lox — must be
+forked and extended at the source level. The adapter is woven into the
+interpreter's parser, evaluator, and runtime state:
+
+| What to add | Detail |
+|-------------|--------|
+| **New syntax** | A declaration statement (`DEF XFN`, `extern:`, …) that script authors use to name and describe an external function |
+| **Registry in state** | A `HashMap<String, FuncDef>` (or equivalent) on the interpreter struct |
+| **Registration logic** | When the declaration is executed, call `DynCaller::define_function` and store the result |
+| **Dispatch logic** | When a call to a registered name is evaluated, retrieve the `FuncDef` and run the push / call loop |
+
+**BASIC example** — the interpreter is extended with a `DEF XFN` statement:
+
+```basic
+DEF XFN abs = "msvcrt.dll|abs|i32|i32|"
+PRINT abs(-42)   ' → 42
+```
+
+The parser recognises `DEF XFN`, the evaluator calls `DynCaller::define_function`, and `FN name(args)` dispatches through dyncall's push / call loop.
+
+**When to use this approach:**
+- The interpreter has no public extension API.
+- You are already maintaining a fork of the interpreter.
+- You want the syntax to feel native to the language (e.g. a keyword declaration form).
 
 ---
 
@@ -241,6 +318,31 @@ write_back_to_script_variable(out_string);
 `dyncall` pre-allocates the C buffer, makes the call, then copies the
 null-terminated result back into your `String`.
 
+### Raw byte buffers (buff / obuff)
+
+`buff` is an **input** raw-byte buffer — the C function receives a pointer to
+your data (`const void *` / `unsigned char *`). Push it using `ArgVal::Pointer`:
+
+```rust
+// raw_ptr is a *mut c_void pointing at your byte data
+inv.push_arg(&ArgVal::Pointer(raw_ptr))?;
+```
+
+`obuff[=N|=argK]` is an **output** byte buffer that the C function fills
+(e.g. `fread`, `ReadFile`). Push a `Vec<u8>` with `push_mut_arg` and read it
+back after the call:
+
+```rust
+let mut buf: Vec<u8> = Vec::new();
+inv.push_mut_arg(&mut buf)?;
+inv.call()?;
+// buf now contains whatever the C function wrote (up to N bytes)
+```
+
+`dyncall` pre-allocates the buffer when the size is specified in the descriptor
+(`=N`) or taken from another argument (`=argK`), makes the call, then resizes
+`buf` to the filled length.
+
 ### Struct arguments
 
 Structs in dyncall descriptors look like `{i32,f64,cstr}` (by value) or
@@ -284,12 +386,22 @@ let arg_type = fdef.get_arg_type(i);   // ArgType::Struct(_) or ArgType::Pointer
 let mut sv = StructValue::from_script_vals(arg_type, &script_vals)?;
 ```
 
+Alternatively, `FuncDef::create_struct(i)` allocates a zeroed `StructValue` for
+argument `i` (useful when you want to fill fields one by one with
+`sv.push_field_coerced`):
+
+```rust
+let mut sv = fdef.create_struct(i)?;   // zeroed, ready to fill
+sv.push_field_coerced(&42i32)?;
+sv.push_field_coerced(&3.14f64)?;
+```
+
 For `{...}` (by value): `inv.push_arg(&sv)?`  
 For `*{...}` (pointer): `inv.push_mut_arg(&mut sv)?`
 
-**Important:** `StructValue` must stay alive for the duration of the call. Build
-all struct values *before* calling `.prep()` on the invocation, or store them in
-a `Vec` that outlives the invocation.
+**Important:** `StructValue` must stay alive until `Invocation::call` returns.
+Build all struct values before pushing arguments, or store them in a `Vec` that
+outlives the invocation.
 
 **Reading struct fields back after a `*{...}` call or a struct return:**
 
@@ -707,6 +819,7 @@ Use this list when writing a new adapter.
 
 ### One-time setup
 
+- [ ] Decide on an [integration strategy](#integration-strategies): extension / plugin (no fork needed) or fork / modification
 - [ ] Add `dyncall = "0.1"` to `Cargo.toml`
 - [ ] Decide where to store `FuncDef` values (a `HashMap<String, FuncDef>` is typical)
 - [ ] Decide your value-model mapping (see [Mapping section](#mapping-your-languages-value-model))
@@ -718,8 +831,10 @@ Use this list when writing a new adapter.
 - [ ] String inputs (`cstr`/`ocstr`): call `push_script_val(ScriptVal::Str(s))`
 - [ ] Pointer outputs (`*i32`, etc.): call `push_script_val(ScriptVal::Nil)`, read back from `result.outputs`
 - [ ] Opaque pointers: call `push_script_val(ScriptVal::Pointer(ptr))` or `ScriptVal::Nil`
-- [ ] Struct inputs (`{...}`): build `StructValue` via `from_script_vals`, call `push_arg` (unchanged)
-- [ ] Struct pointer inputs (`*{...}`): build `StructValue`, call `push_mut_arg`, write fields back (unchanged)
+- [ ] Input byte buffers (`buff`): push `ArgVal::Pointer(raw_ptr)` via `push_arg`
+- [ ] Output byte buffers (`obuff`): push a `Vec<u8>` via `push_mut_arg`, read after call
+- [ ] Struct inputs (`{...}`): build `StructValue` via `from_script_vals` or `fdef.create_struct(i)`, call `push_arg`
+- [ ] Struct pointer inputs (`*{...}`): build `StructValue`, call `push_mut_arg`, write fields back
 - [ ] Consider using the `coerce` flag if you prefer `push_arg(&val_as_f64)` style
 
 ### Return value handling
