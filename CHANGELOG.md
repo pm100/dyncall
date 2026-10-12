@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   libffi's static type instead of a moved copy. (#1)
 - `FuncDef` is now genuinely `Clone + Send + Sync`, matching `ADAPTER_GUIDE.md`.
   Cloning is a cheap reference-count bump. (#2)
+- Pushing an `ArgVal` is now checked against the declared argument type instead
+  of passing mismatched bytes to libffi. With `coerce`, numeric variants are
+  converted; pointer parameters also accept a pointer-sized integer. (#4)
 
 ### Tests
 - Added regression tests for the code-review findings (#1, #2, #4–#8, #11–#13,
