@@ -106,11 +106,9 @@ impl DynamicLibrary {
 mod dl {
     use anyhow::bail;
     use anyhow::Result;
-    use libc;
     use std::ffi::{CStr, CString, OsStr};
     use std::os::unix::ffi::OsStrExt;
     use std::ptr;
-    use std::str;
     pub fn open(filename: Option<&OsStr>) -> Result<*mut u8> {
         match filename {
             Some(filename) => {
@@ -150,9 +148,9 @@ mod dl {
     pub unsafe fn symbol(handle: *mut u8, symbol: *const libc::c_char) -> *mut u8 {
         dlsym(handle as *mut libc::c_void, symbol) as *mut u8
     }
+    #[allow(dead_code)]
     pub unsafe fn close(handle: *mut u8) {
         dlclose(handle as *mut libc::c_void);
-        ()
     }
 
     extern "C" {
