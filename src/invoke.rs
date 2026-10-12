@@ -523,9 +523,15 @@ pub struct ScriptResult {
     /// - `cstr` → [`ScriptVal::Str`].
     /// - `ptr` → [`ScriptVal::Pointer`] or [`ScriptVal::Nil`] (if null).
     /// - `void` → [`ScriptVal::Nil`].
-    /// - Struct return types → not supported via `call_scripted`; use
-    ///   [`call`](Invocation::call) instead.
+    /// - `*{...}` → [`ScriptVal::Nil`]; the struct is in
+    ///   [`return_struct`](ScriptResult::return_struct).
+    /// - Struct-by-value return types → not supported by descriptors.
     pub return_val: ScriptVal,
+    /// For a `*{...}` return type: a snapshot copy of the struct the callee
+    /// returned a pointer to, or `None` if the pointer was NULL (or the return
+    /// type is not a struct pointer). `return_val` is [`ScriptVal::Nil`] in
+    /// this case.
+    pub return_struct: Option<StructValue>,
     /// Written-back values for each output-pointer argument.
     ///
     /// Each entry is `(arg_index, value)` where `arg_index` is the zero-based
@@ -550,6 +556,7 @@ impl<'a> Invocation<'a> {
         let return_type = self.func_def.inner.return_type.clone();
 
         let ret_arg_val = self.call()?;
+        let mut return_struct = None;
 
         // Convert return ArgVal → ScriptVal
         let return_val = match &return_type {
@@ -568,6 +575,12 @@ impl<'a> Invocation<'a> {
                 } else {
                     ScriptVal::Nil
                 }
+            }
+            ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
+                if let ArgVal::StructValue(sv) = ret_arg_val {
+                    return_struct = Some(sv);
+                }
+                ScriptVal::Nil
             }
             ArgType::OpaquePointer | ArgType::Pointer(_) => {
                 if let ArgVal::Pointer(p) = ret_arg_val {
@@ -601,6 +614,6 @@ impl<'a> Invocation<'a> {
             .map(|(idx, slot)| (idx, slot.to_script_val()))
             .collect();
 
-        Ok(ScriptResult { return_val, outputs })
+        Ok(ScriptResult { return_val, return_struct, outputs })
     }
 }

@@ -1350,4 +1350,14 @@ mod test {
         }));
         assert_eq!(r.ok(), Some(true), "create_struct(99) should return Err without panicking");
     }
+
+    /// call_scripted must hand back the struct a `*{...}` return points at.
+    #[test]
+    fn test_call_scripted_struct_pointer_return() {
+        let def = DynCaller::define_function(&format!("{LIBC}|localeconv||*{{cstr,cstr}}|")).unwrap();
+        let mut inv = def.prep();
+        let r = inv.call_scripted().unwrap();
+        let sv = r.return_struct.expect("localeconv() returned no struct");
+        assert_eq!(sv.read_field::<String>(0).unwrap(), ".");
+    }
 }

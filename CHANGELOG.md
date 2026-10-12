@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   past the buffer), and by-value structs must have every field pushed. Pointer-to-
   struct arguments may still be left partly unpopulated (zero-filled). Added
   `StructType::same_layout`. (#5)
+- `call_scripted` dropped the struct for `*{...}` return types (adapters saw a
+  NULL/zero). `ScriptResult` now has a `return_struct: Option<StructValue>`
+  field carrying it.
 
 ### Tests
 - Added regression tests for the code-review findings (#1, #2, #4–#8, #11–#13,
