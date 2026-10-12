@@ -39,16 +39,6 @@ impl DynamicLibrary {
         }
     }
 
-    /// Prepends a path to this process's search path for dynamic libraries
-    pub fn prepend_search_path(path: &Path) {
-        let mut search_path = DynamicLibrary::search_path();
-        search_path.insert(0, path.to_path_buf());
-        env::set_var(
-            DynamicLibrary::envvar(),
-            DynamicLibrary::create_path(&search_path),
-        );
-    }
-
     /// From a slice of paths, create a new vector which is suitable to be an
     /// environment variable for this platforms dylib search path.
     pub fn create_path(path: &[PathBuf]) -> OsString {
@@ -143,6 +133,8 @@ mod dl {
         F: FnOnce() -> T,
     {
         unsafe {
+            // Discard any stale error left by an earlier dl* call.
+            dlerror();
             let result = f();
 
             let last_error = dlerror();
@@ -202,7 +194,7 @@ mod dl {
                 let result = unsafe { LoadLibraryW(filename_str.as_ptr() as *const libc::c_void) };
                 if result.is_null() {
                     let err = unsafe { GetLastError() };
-                    Err(anyhow!("Error code {:08x}", err))
+                    Err(anyhow!("{}", std::io::Error::from_raw_os_error(err as i32)))
                 } else {
                     Ok(result as *mut u8)
                 }
@@ -213,7 +205,7 @@ mod dl {
                     unsafe { GetModuleHandleExW(0 as libc::c_uint, ptr::null(), &mut handle) };
                 if succeeded == 0 {
                     let err = unsafe { GetLastError() };
-                    Err(anyhow!("Error code {:08x}", err))
+                    Err(anyhow!("{}", std::io::Error::from_raw_os_error(err as i32)))
                 } else {
                     Ok(handle as *mut u8)
                 }
@@ -241,7 +233,7 @@ mod dl {
 
     #[allow(non_snake_case, dead_code)]
     extern "system" {
-        fn SetLastError(error: libc::size_t);
+        fn SetLastError(error: u32);
         fn SetThreadErrorMode(uMode: libc::c_uint, oldMode: *mut libc::c_uint) -> libc::c_uint;
         fn LoadLibraryW(name: *const libc::c_void) -> *mut libc::c_void;
         fn GetModuleHandleExW(

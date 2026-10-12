@@ -1,7 +1,6 @@
 use std::{ffi::c_void, ptr};
 
 use anyhow::{bail, Result};
-use libc::strlen;
 use libffi::raw::{
     ffi_call, FFI_TYPE_DOUBLE, FFI_TYPE_FLOAT, FFI_TYPE_POINTER, FFI_TYPE_SINT16, FFI_TYPE_SINT32,
     FFI_TYPE_SINT64, FFI_TYPE_SINT8, FFI_TYPE_UINT16, FFI_TYPE_UINT32, FFI_TYPE_UINT64,
@@ -18,6 +17,7 @@ use crate::structs::ScriptVal;
 /// Private storage for a boxed output slot created by [`Invocation::push_script_val`].
 pub(crate) enum ScriptOutputSlot {
     Char(Box<u8>),
+    I8(Box<i8>),
     I16(Box<i16>),
     U16(Box<u16>),
     I32(Box<i32>),
@@ -27,6 +27,8 @@ pub(crate) enum ScriptOutputSlot {
     F32(Box<f32>),
     F64(Box<f64>),
     Ptr(Box<*mut c_void>),
+    // Boxed so the `String` header has a stable address while the callee runs.
+    #[allow(clippy::box_collection)]
     OcString(Box<String>),
 }
 
@@ -34,6 +36,7 @@ impl ScriptOutputSlot {
     fn to_script_val(&self) -> ScriptVal {
         match self {
             Self::Char(v) => ScriptVal::Integer(**v as i64),
+            Self::I8(v) => ScriptVal::Integer(**v as i64),
             Self::I16(v) => ScriptVal::Integer(**v as i64),
             Self::U16(v) => ScriptVal::Integer(**v as i64),
             Self::I32(v) => ScriptVal::Integer(**v as i64),
@@ -63,6 +66,30 @@ fn read_errno() -> i32 {
         .raw_os_error()
         .unwrap_or(0)
 }
+/// Reset the platform error code before a call (see [`read_errno`]).
+#[inline(always)]
+fn clear_errno() {
+    #[cfg(windows)]
+    unsafe {
+        extern "system" {
+            fn SetLastError(code: u32);
+        }
+        SetLastError(0);
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    unsafe {
+        *libc::__errno_location() = 0;
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    unsafe {
+        *libc::__error() = 0;
+    }
+}
+
+/// Upper bound on a caller-requested output buffer (`ocstr=`/`obuff=`), so a
+/// bad length value cannot make the process allocate unbounded memory.
+const MAX_OUTPUT_BUFFER: usize = 256 * 1024 * 1024;
+
 /// A single prepared call to a foreign function.
 ///
 /// Obtained from [`FuncDef::prep`]. Arguments are pushed in declaration order
@@ -75,8 +102,8 @@ fn read_errno() -> i32 {
 /// immediately after the foreign function returns, before any other code
 /// can clobber it.
 ///
-/// An `Invocation` is single-use: after calling, the argument lists are
-/// cleared. Call [`FuncDef::prep`] again for the next invocation.
+/// After calling, the argument lists are cleared. Call [`FuncDef::prep`] again
+/// for the next invocation rather than reusing one.
 pub struct Invocation<'a> {
     pub(crate) func_def: &'a FuncDef,
     pub(crate) arg_ptrs: Vec<*mut c_void>,
@@ -108,7 +135,24 @@ impl<'a> Invocation<'a> {
     /// [`call`](Invocation::call) returns, `value` contains the result written
     /// by the callee. Returns an error if more arguments are pushed than the
     /// function declares.
-    pub fn push_mut_arg<T>(&mut self, value: &mut T) -> Result<()>
+    ///
+    /// The `Invocation` keeps a raw pointer to `value`, so `value` stays
+    /// mutably borrowed until the invocation's last use (normally
+    /// [`call`](Invocation::call)). The borrow checker therefore rejects code
+    /// that drops or reads `value` before the call:
+    ///
+    /// ```compile_fail
+    /// # use dyncall::DynCaller;
+    /// # fn demo(def: &dyncall::FuncDef) {
+    /// let mut inv = def.prep();
+    /// {
+    ///     let mut n = 0i32;
+    ///     inv.push_mut_arg(&mut n).unwrap();
+    /// } // `n` dropped here while `inv` still points at it
+    /// inv.call().unwrap();
+    /// # }
+    /// ```
+    pub fn push_mut_arg<T>(&mut self, value: &'a mut T) -> Result<()>
     where
         T: ToMutArg + ?Sized,
     {
@@ -199,6 +243,7 @@ impl<'a> Invocation<'a> {
                 }
                 match inner.as_ref() {
                     ArgType::Char         => push_out_slot!(u8,  Char, script_val_as_u8(&val)),
+                    ArgType::I8           => push_out_slot!(i8,  I8,   script_val_as_i64(&val) as i8),
                     ArgType::I16          => push_out_slot!(i16, I16,  script_val_as_i64(&val) as i16),
                     ArgType::U16          => push_out_slot!(u16, U16,  script_val_as_i64(&val) as u16),
                     ArgType::I32          => push_out_slot!(i32, I32,  script_val_as_i64(&val) as i32),
@@ -300,7 +345,7 @@ impl<'a> Invocation<'a> {
             FFI_TYPE_SINT16 => ArgVal::I16(0),
             FFI_TYPE_UINT16 => ArgVal::U16(0),
             FFI_TYPE_UINT8 => ArgVal::Char(0),
-            FFI_TYPE_SINT8 => ArgVal::Char(0),
+            FFI_TYPE_SINT8 => ArgVal::I8(0),
             FFI_TYPE_FLOAT => ArgVal::F32(0.0),
             FFI_TYPE_DOUBLE => ArgVal::F64(0.0),
             FFI_TYPE_VOID => ArgVal::None,
@@ -312,6 +357,10 @@ impl<'a> Invocation<'a> {
             _ => result.payload_ptr(),
         };
         log::trace!("call2 self={:?}", self.arg_ptrs);
+        if self.func_def.inner.capture_errno {
+            // Reset first so a successful call cannot report a stale value.
+            clear_errno();
+        }
         unsafe {
             ffi_call(
                 &mut cif,
@@ -346,13 +395,15 @@ impl<'a> Invocation<'a> {
                 }
             }
             // cstr — callee returned a `const char *`; dereference into a Rust String.
+            // A NULL pointer is returned as `ArgVal::Pointer(null)` so it can be
+            // told apart from an empty string.
             ArgType::CString => {
                 let raw_ptr = if let ArgVal::Pointer(p) = result { p } else { ptr::null_mut() };
                 if raw_ptr.is_null() {
-                    ArgVal::RustString(Box::into_raw(Box::new(String::new())))
+                    ArgVal::Pointer(ptr::null_mut())
                 } else {
                     let cstr = unsafe { std::ffi::CStr::from_ptr(raw_ptr as *const std::ffi::c_char) };
-                    ArgVal::RustString(Box::into_raw(Box::new(cstr.to_string_lossy().into_owned())))
+                    ArgVal::Str(cstr.to_string_lossy().into_owned())
                 }
             }
             _ => result,
@@ -384,32 +435,49 @@ impl<'a> Invocation<'a> {
     }
 
     fn resolve_length(&self, ldef: &LengthDef) -> Result<Option<usize>> {
-        match ldef {
-            LengthDef::Arg(argnum) => {
-                let len = match self.arg_vals.get((*argnum * 2 + 1) as usize) {
-                    Some(ArgVal::Char(v)) => *v as usize,
-                    Some(ArgVal::U16(v))  => *v as usize,
-                    Some(ArgVal::I16(v))  => *v as usize,
-                    Some(ArgVal::U32(v))  => *v as usize,
-                    Some(ArgVal::I32(v))  => *v as usize,
-                    Some(ArgVal::U64(v))  => *v as usize,
-                    Some(ArgVal::I64(v))  => *v as usize,
-                    _ => bail!("length arg {} is not an integer type", argnum),
-                };
-                Ok(Some(len))
-            }
-            LengthDef::Fixed(len) => Ok(Some(*len)),
-            LengthDef::None => Ok(None),
+        let len: i128 = match ldef {
+            LengthDef::Arg(argnum) => match self.arg_vals.get(*argnum as usize * 2 + 1) {
+                Some(ArgVal::Char(v)) => *v as i128,
+                Some(ArgVal::I8(v)) => *v as i128,
+                Some(ArgVal::U16(v)) => *v as i128,
+                Some(ArgVal::I16(v)) => *v as i128,
+                Some(ArgVal::U32(v)) => *v as i128,
+                Some(ArgVal::I32(v)) => *v as i128,
+                Some(ArgVal::U64(v)) => *v as i128,
+                Some(ArgVal::I64(v)) => *v as i128,
+                _ => bail!("length arg {} is not an integer type", argnum),
+            },
+            LengthDef::Fixed(len) => *len as i128,
+            LengthDef::None => return Ok(None),
+        };
+        if len < 0 {
+            bail!("output buffer length is negative ({})", len);
         }
+        if len > MAX_OUTPUT_BUFFER as i128 {
+            bail!(
+                "output buffer length {} exceeds the maximum of {} bytes",
+                len,
+                MAX_OUTPUT_BUFFER
+            );
+        }
+        Ok(Some(len as usize))
     }
 
     fn pre_process_ocstring(&mut self, arg_idx: usize, ldef: &LengthDef) -> Result<()> {
-        let Some(len) = self.resolve_length(ldef)? else { return Ok(()) };
+        let Some(len) = self.resolve_length(ldef)? else {
+            bail!("ocstr argument {} has no length; declare it as ocstr=N or ocstr=argK", arg_idx);
+        };
         if let ArgVal::RustString(str) = &mut self.arg_vals[arg_idx * 2 + 1] {
             let s = unsafe { &mut **str };
+            let used = s.len();
             s.reserve(len + 1); // +1 for null terminator
+            let cap = s.capacity();
+            let p = s.as_mut_ptr();
+            // Zero the spare capacity so the buffer is always initialised and
+            // NUL-terminated even if the callee writes nothing.
+            unsafe { ptr::write_bytes(p.add(used), 0, cap - used) };
             log::trace!("pre_process_ocstring reserved len={}", len);
-            self.arg_vals[arg_idx * 2] = ArgVal::Pointer(s.as_mut_ptr() as *mut c_void);
+            self.arg_vals[arg_idx * 2] = ArgVal::Pointer(p as *mut c_void);
         };
         Ok(())
     }
@@ -454,14 +522,17 @@ impl<'a> Invocation<'a> {
                 ArgType::OCString(_ldef) => {
                     if let ArgVal::Pointer(p) = self.arg_vals[i * 2] {
                         if let ArgVal::RustString(str) = self.arg_vals.get_mut(i * 2 + 1).unwrap() {
-                            unsafe {
-                                let str = &mut **str;
-                                // Cap at capacity so a non-terminated buffer can't overrun.
-                                let cap = str.capacity();
-                                let len = strlen(p as *const i8).min(cap);
-                                log::trace!("fgets post_process_args len={}", len);
-                                str.as_mut_vec().set_len(len);
-                            }
+                            let str = unsafe { &mut **str };
+                            // The buffer was zero-filled to its full capacity before
+                            // the call, so scanning to the first NUL stays in bounds.
+                            let bytes = unsafe {
+                                std::slice::from_raw_parts(p as *const u8, str.capacity())
+                            };
+                            let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                            log::trace!("post_process_args ocstr len={}", len);
+                            // Callee output may not be valid UTF-8.
+                            let text = String::from_utf8_lossy(&bytes[..len]).into_owned();
+                            *str = text;
                         }
                     }
                 }
@@ -569,11 +640,9 @@ impl<'a> Invocation<'a> {
                 else { ScriptVal::Nil }
             }
             ArgType::CString => {
-                if let ArgVal::RustString(p) = ret_arg_val {
-                    let s = unsafe { Box::from_raw(p) };
-                    ScriptVal::Str(*s)
-                } else {
-                    ScriptVal::Nil
+                match ret_arg_val {
+                    ArgVal::Str(s) => ScriptVal::Str(s),
+                    _ => ScriptVal::Nil, // NULL
                 }
             }
             ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
@@ -596,6 +665,7 @@ impl<'a> Invocation<'a> {
                 // All integer-ish types
                 match ret_arg_val {
                     ArgVal::Char(v)  => ScriptVal::Integer(v as i64),
+                    ArgVal::I8(v)    => ScriptVal::Integer(v as i64),
                     ArgVal::I16(v)   => ScriptVal::Integer(v as i64),
                     ArgVal::U16(v)   => ScriptVal::Integer(v as i64),
                     ArgVal::I32(v)   => ScriptVal::Integer(v as i64),

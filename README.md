@@ -39,7 +39,7 @@ dyncall = "0.1"
 1. Define a function with [`DynCaller::define_function`]
 2. Prepare an [`Invocation`] via [`FuncDef::prep`]
 3. Push arguments with `push_arg` (input) or `push_mut_arg` (output / pointer)
-4. Call with `call` or `call_and_return`
+4. Call with `call` (returns an `ArgVal`) or `call_scripted` (returns a `ScriptResult`)
 
 ## Function descriptor format
 
@@ -53,11 +53,14 @@ All five `|`-separated fields are required (the last two may be empty).
 
 | Token                  | C / Rust type                                      |
 |------------------------|----------------------------------------------------|
-| `i8`, `u8`             | `int8_t` / `uint8_t`                               |
+| `i8`                   | `int8_t`                                           |
+| `u8`, `bool`           | `uint8_t` / `bool`                                 |
 | `i16`, `u16`           | `int16_t` / `uint16_t`                             |
 | `i32`, `u32`           | `int32_t` / `uint32_t`                             |
 | `i64`, `u64`           | `int64_t` / `uint64_t`                             |
 | `f32`, `f64`           | `float` / `double`                                 |
+| `usize`, `isize`       | `size_t` / `ssize_t` (pointer width)               |
+| `clong`, `culong`      | C `long` / `unsigned long` (32-bit on Windows)     |
 | `ptr`                  | opaque `void *`                                    |
 | `cstr`                 | input `const char *` (null-terminated)             |
 | `ocstr[=N\|=argK]`     | output `char *` buffer; size fixed or from arg K   |
@@ -67,7 +70,7 @@ All five `|`-separated fields are required (the last two may be empty).
 | `*{T1,T2,...}`         | pointer to a flat struct                           |
 | `void`                 | no return value                                    |
 
-Struct fields may be any of the primitive scalar types (`i8/u8`, `i16/u16`, `i32/u32`, `i64/u64`, `f32`, `f64`) or `cstr` (a `char *` pointer followed to produce an owned string). Nested structs are not supported.
+Struct fields may be any of the primitive scalar types (`i8`, `u8`, `i16/u16`, `i32/u32`, `i64/u64`, `f32`, `f64`) or `cstr` (a `char *` pointer followed to produce an owned string). Nested structs are not supported.
 
 ### Output buffer sizing (`ocstr` and `obuff`)
 
@@ -82,7 +85,9 @@ For output string and byte-buffer arguments, `dyncall` needs to know how large a
                 arg 1 (the buffer) gets its size from arg 0 (the u32 length)
 ```
 
-If neither qualifier is given the buffer is not pre-allocated; the callee must not write to it (useful only when the pointer itself is the meaningful value).
+`ocstr` requires a length. `obuff` without a length uses the length of the `Vec<u8>` you pass. Lengths must be non-negative and at most 256 MiB; `argK` must refer to another integer argument. These rules are checked when the function is defined or called, and violations return `Err`.
+
+On return the `String` holds the bytes up to the first NUL, converted lossily to UTF-8.
 
 ### Flags
 
@@ -93,6 +98,8 @@ If neither qualifier is given the buffer is not pre-allocated; the callee must n
 | `errno`     | Capture platform error after call; read via `inv.last_errno()`        |
 
 Flags can be combined with a comma: `fixargs=1,coerce`.
+
+**Variadic arguments:** C promotes `float` to `double` and small integers to `int` when they pass through `...`, so variadic arguments must be declared `f64`, `i32`/`u32` (or wider). Declaring `f32`, `u8`/`i8`, `i16`/`u16` after the fixed arguments is rejected by `define_function`.
 
 Scripting-language adapters where all values are loosely typed can enable coercion globally at startup rather than per-descriptor:
 
@@ -112,7 +119,7 @@ let def = DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno"
 let mut inv = def.prep();
 inv.push_arg(&"/no/such/file".to_string()).unwrap();
 inv.push_arg(&"r".to_string()).unwrap();
-let result = inv.call();
+let result = inv.call().unwrap();
 if result.as_pointer().map(|p| p.is_null()).unwrap_or(true) {
     println!("fopen failed, errno={}", inv.last_errno().unwrap());
 }
@@ -148,9 +155,18 @@ let mut inv = def.prep();
 inv.push_arg(&42i64).unwrap();        // i64 → i32: truncate
 inv = def.prep();
 inv.push_arg(&"-42".to_string()).unwrap(); // String → i32: parse
-let result = inv.call();
+let result = inv.call().unwrap();
 assert_eq!(*result.as_i32().unwrap(), 42);
 ```
+
+## Safety and trust
+
+`dyncall` is a thin layer over `dlopen`/`LoadLibrary` and `libffi`. **A descriptor string is a request to run native code**: it names a library (bare names are resolved through the operating system's search path), a symbol, and a signature that you are trusting to be correct. A wrong signature is undefined behaviour in the callee, exactly as in C.
+
+- Never build descriptors from untrusted input (user scripts included) unless you restrict which libraries and symbols may be named, for example by allow-listing absolute library paths.
+- Pass absolute library paths where you can, to avoid DLL/shared-object search-path hijacking.
+- Pointers you pass as `ptr` (or `ArgVal::Pointer`) are not checked; only you know whether they are valid.
+- `FuncDef` is `Clone + Send + Sync`; an `Invocation` is single-threaded. Values pushed with `push_mut_arg` stay borrowed until the invocation's last use.
 
 ## Examples
 
@@ -166,7 +182,7 @@ use dyncall::DynCaller;
 let def = DynCaller::define_function(&format!("{LIBC}|atoi|cstr|i32|")).unwrap();
 let mut inv = def.prep();
 inv.push_arg(&"42".to_string()).unwrap();
-let result = inv.call();
+let result = inv.call().unwrap();
 assert_eq!(*result.as_i32().unwrap(), 42);
 ```
 
@@ -214,7 +230,7 @@ pair.push_field(&10u32).unwrap();
 pair.push_field(&32u32).unwrap();
 
 inv.push_arg(&pair);
-let result = inv.call();
+let result = inv.call().unwrap();
 assert_eq!(*result.as_u32().unwrap(), 42);
 ```
 
@@ -250,7 +266,7 @@ let def = DynCaller::define_function(
 ).unwrap();
 
 let mut inv = def.prep();
-let result = inv.call();
+let result = inv.call().unwrap();
 let sv = result.as_struct_value().unwrap();
 // field 0: decimal_point, field 1: thousands_sep
 println!("decimal_point: {:?}", sv.script_read(0).unwrap());

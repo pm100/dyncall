@@ -239,7 +239,7 @@ pub(crate) fn struct_type_from_arg_type(arg_type: &ArgType) -> Option<&StructTyp
 
 pub(crate) fn scalar_layout(arg_type: &ArgType) -> Option<(usize, usize)> {
     match arg_type {
-        ArgType::Char => Some((std::mem::size_of::<u8>(), std::mem::align_of::<u8>())),
+        ArgType::Char | ArgType::I8 => Some((std::mem::size_of::<u8>(), std::mem::align_of::<u8>())),
         ArgType::U16 | ArgType::I16 => {
             Some((std::mem::size_of::<u16>(), std::mem::align_of::<u16>()))
         }
@@ -334,7 +334,7 @@ impl FromStructField for u8 {
 impl ToStructField for i8 {
     fn write_field(&self, expected: &ArgType, dst: &mut [u8]) -> Result<()> {
         match expected {
-            ArgType::Char => {
+            ArgType::I8 => {
                 dst.copy_from_slice(&self.to_ne_bytes());
                 Ok(())
             }
@@ -346,7 +346,7 @@ impl ToStructField for i8 {
 impl FromStructField for i8 {
     fn read_field(expected: &ArgType, src: &[u8]) -> Result<Self> {
         match expected {
-            ArgType::Char => Ok(i8::from_ne_bytes([src[0]])),
+            ArgType::I8 => Ok(i8::from_ne_bytes([src[0]])),
             _ => bail!("Expected {:?} field, requested i8", expected),
         }
     }
@@ -358,7 +358,8 @@ impl FromStructField for i8 {
 /// as necessary. Used by [`StructValue::read_field_coerced`].
 fn read_any_numeric_as_i64(src_type: &ArgType, src: &[u8]) -> Result<i64> {
     Ok(match src_type {
-        ArgType::Char => src[0] as i8 as i64,
+        ArgType::Char => src[0] as i64,
+        ArgType::I8   => src[0] as i8 as i64,
         ArgType::I16  => i16::from_ne_bytes(src[..2].try_into().unwrap()) as i64,
         ArgType::U16  => u16::from_ne_bytes(src[..2].try_into().unwrap()) as i64,
         ArgType::I32  => i32::from_ne_bytes(src[..4].try_into().unwrap()) as i64,
@@ -374,7 +375,7 @@ fn read_any_numeric_as_i64(src_type: &ArgType, src: &[u8]) -> Result<i64> {
 /// Write an `i64` into a field of any numeric type, truncating/converting as needed.
 fn write_i64_into_any_numeric(value: i64, dst_type: &ArgType, dst: &mut [u8]) -> Result<()> {
     match dst_type {
-        ArgType::Char => dst[0] = value as u8,
+        ArgType::Char | ArgType::I8 => dst[0] = value as u8,
         ArgType::I16  => dst[..2].copy_from_slice(&(value as i16).to_ne_bytes()),
         ArgType::U16  => dst[..2].copy_from_slice(&(value as u16).to_ne_bytes()),
         ArgType::I32  => dst[..4].copy_from_slice(&(value as i32).to_ne_bytes()),
@@ -415,7 +416,8 @@ macro_rules! impl_coerce_into_field {
 impl CoerceFromField for f64 {
     fn coerce_from_field(src_type: &ArgType, src: &[u8]) -> Result<Self> {
         Ok(match src_type {
-            ArgType::Char => src[0] as i8 as f64,
+            ArgType::Char => src[0] as f64,
+            ArgType::I8   => src[0] as i8 as f64,
             ArgType::I16  => i16::from_ne_bytes(src[..2].try_into().unwrap()) as f64,
             ArgType::U16  => u16::from_ne_bytes(src[..2].try_into().unwrap()) as f64,
             ArgType::I32  => i32::from_ne_bytes(src[..4].try_into().unwrap()) as f64,
@@ -571,8 +573,8 @@ impl StructValue {
 
 /// A dynamically-typed value for use by scripting-language adapters.
 ///
-/// Used with [`Invocation::push_script_val`] to push arguments and returned
-/// by [`Invocation::call_scripted`] for return values and output-pointer
+/// Used with [`Invocation::push_script_val`](crate::Invocation::push_script_val) to push arguments and returned
+/// by [`Invocation::call_scripted`](crate::Invocation::call_scripted) for return values and output-pointer
 /// writebacks.  Also accepted by [`StructValue::from_script_vals`] and
 /// returned by [`StructValue::script_read`].
 #[derive(Debug, Clone, PartialEq)]

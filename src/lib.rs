@@ -38,11 +38,14 @@
 //!
 //! | Token           | Rust / C type                                      |
 //! |-----------------|----------------------------------------------------|
-//! | `i8`, `u8`      | `int8_t` / `uint8_t`                               |
+//! | `i8`            | `int8_t`                                           |
+//! | `u8`, `bool`    | `uint8_t` / `bool`                                 |
 //! | `i16`, `u16`    | `int16_t` / `uint16_t`                             |
 //! | `i32`, `u32`    | `int32_t` / `uint32_t`                             |
 //! | `i64`, `u64`    | `int64_t` / `uint64_t`                             |
 //! | `f32`, `f64`    | `float` / `double`                                 |
+//! | `usize`, `isize`| `size_t` / `ssize_t`                               |
+//! | `clong`, `culong`| C `long` / `unsigned long`                        |
 //! | `ptr`           | opaque `void *`                                    |
 //! | `cstr`          | input `const char *` (null-terminated)             |
 //! | `ocstr[=N\|=argK]` | output `char *` buffer; size fixed or from arg K|
@@ -59,6 +62,16 @@
 //! | `fixargs=N`   | Variadic function with `N` fixed arguments           |
 //! | `coerce`      | Enable automatic type coercion when pushing arguments|
 //! | `errno`       | Capture platform error after the call; read via [`Invocation::last_errno`]|
+//!
+//! ## Safety and trust
+//!
+//! A descriptor string names a library, a symbol and a signature, and calling
+//! it runs native code. Never build descriptors from untrusted input without
+//! restricting which libraries and symbols are allowed, prefer absolute library
+//! paths (bare names go through the OS search path), and remember that a wrong
+//! signature or an invalid `ptr` argument is undefined behaviour, as in C.
+//! Variadic arguments (`fixargs=N`) must be declared with their promoted types
+//! (`f64`, `i32`/`u32` or wider); `define_function` rejects the others.
 //!
 //! ## Example
 //!
@@ -101,7 +114,7 @@
 //!     println!("fopen failed, errno={}", inv.last_errno().unwrap());
 //! }
 //! ```
-
+//!
 //! For struct arguments, create a [`StructValue`] from the argument's declared
 //! type, push each field in order with [`StructValue::push_field`], then pass
 //! the completed value into the [`Invocation`].
@@ -172,6 +185,7 @@ mod dylib;
 pub mod invoke;
 pub mod structs;
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod test;
 pub use args::ArgType;
 pub use args::ArgVal;

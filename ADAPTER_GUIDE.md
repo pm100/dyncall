@@ -204,8 +204,9 @@ fn register_external(name: &str, descriptor: &str, registry: &mut HashMap<String
 }
 ```
 
-`FuncDef` is `Clone + Send + Sync`, so you can store it anywhere that suits
-your interpreter's architecture (a hash map keyed by function name is common).
+`FuncDef` is `Clone + Send + Sync` (a cheap reference-counted handle), so you can
+store it anywhere that suits your interpreter's architecture (a hash map keyed by
+function name is common). An `Invocation` is not `Send`; create one per call.
 
 **`define_function` validates the descriptor eagerly** — a typo in the type
 string is caught here, not on the first call.

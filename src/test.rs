@@ -86,8 +86,7 @@ mod test {
         let mut inv = def.prep();
         inv.push_arg(&22i32).unwrap(); // EINVAL = 22 on all platforms
         let ret = inv.call().unwrap();
-        let raw = ret.as_rust_string().unwrap();
-        let s = unsafe { &**raw };
+        let s = ret.as_str().unwrap();
         println!("strerror(22) = {:?}", s);
         assert!(!s.is_empty(), "strerror returned an empty string");
         // If the bug were present we would get a raw pointer address back
@@ -263,7 +262,7 @@ mod test {
 
     #[test]
     fn test_scanf_num_f32() {
-        let instr = "3.14\n".to_string();
+        let instr = "2.5\n".to_string();
         let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*f32|i32|fixargs=2"
         ))
@@ -276,7 +275,7 @@ mod test {
         sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
-        assert!((ans - 3.14f32).abs() < 1e-4);
+        assert!((ans - 2.5f32).abs() < 1e-4);
         assert_eq!(*ret.as_i32().unwrap(), 1);
     }
 
@@ -358,7 +357,7 @@ mod test {
 
     #[test]
     fn test_scanf_num_f64() {
-        let instr = "3.14159\n".to_string();
+        let instr = "2.75\n".to_string();
         let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,*f64|i32|fixargs=2"
         ))
@@ -371,14 +370,14 @@ mod test {
         sscanf.push_mut_arg(&mut ans).unwrap();
         let ret = sscanf.call().unwrap();
         println!("sscanf ret={:?} ans={}", ret.as_i32().unwrap(), ans);
-        assert!((ans - 3.14159).abs() < 1e-9);
+        assert!((ans - 2.75).abs() < 1e-9);
         assert_eq!(*ret.as_i32().unwrap(), 1);
     }
 
     #[test]
     fn test_scanf_string_and_numbers() {
         let instr =
-            "hello 42 4294967295 18446744073709551615 -9223372036854775808 3.14159\n".to_string();
+            "hello 42 4294967295 18446744073709551615 -9223372036854775808 2.75\n".to_string();
         let sscanf_def = DynCaller::define_function(&format!(
             "{LIBC}|sscanf|cstr,cstr,ocstr=50,*i32,*u32,*u64,*i64,*f64|i32|fixargs=2"
         ))
@@ -415,7 +414,7 @@ mod test {
         assert_eq!(u32v, 4_294_967_295);
         assert_eq!(u64v, 18_446_744_073_709_551_615);
         assert_eq!(i64v, -9_223_372_036_854_775_808);
-        assert!((f64v - 3.14159).abs() < 1e-9);
+        assert!((f64v - 2.75).abs() < 1e-9);
         assert_eq!(*ret.as_i32().unwrap(), 6);
     }
 
@@ -811,19 +810,10 @@ mod test {
 
     #[test]
     fn test_invalid_length_arg_type_returns_error() {
-        // Declare fgets with the length arg (arg 1) typed as f32 rather than i32.
-        // resolve_length will find an F32 ArgVal and must return Err, not panic.
-        // We use fgets(char*, int, FILE*) but lie about arg 1 being f32.
-        // The error fires in pre_process_args() before any FFI call is made.
-        let def = DynCaller::define_function(
-            &format!("{LIBC}|abs|f32,ocstr=arg0|void|")
-        ).unwrap();
-        let mut inv = def.prep();
-        inv.push_arg(&1.0f32).unwrap();
-        let mut buf = String::new();
-        inv.push_mut_arg(&mut buf).unwrap();
-        let result = inv.call();
-        assert!(result.is_err(), "non-integer length arg should return an error, not panic");
+        // A length argument that is not an integer type is rejected when the
+        // function is defined, before any call can be made.
+        let result = DynCaller::define_function(&format!("{LIBC}|abs|f32,ocstr=arg0|void|"));
+        assert!(result.is_err(), "non-integer length arg should be rejected");
     }
 
 
@@ -846,12 +836,12 @@ mod test {
         let st = StructType::new(vec![ArgType::I32, ArgType::F64, ArgType::U16]).unwrap();
         let mut sv = StructValue::from_struct_type(&st);
         sv.push_field(&42i32).unwrap();
-        sv.push_field(&3.14f64).unwrap();
+        sv.push_field(&2.5f64).unwrap();
         sv.push_field(&7u16).unwrap();
 
         // f64 coerced read — no loss for these values
         assert_eq!(sv.read_field_coerced::<f64>(0).unwrap(), 42.0);
-        assert!((sv.read_field_coerced::<f64>(1).unwrap() - 3.14).abs() < 1e-9);
+        assert!((sv.read_field_coerced::<f64>(1).unwrap() - 2.5).abs() < 1e-9);
         assert_eq!(sv.read_field_coerced::<f64>(2).unwrap(), 7.0);
 
         // i64 coerced read
@@ -1102,10 +1092,10 @@ mod test {
         use crate::ScriptVal;
         let def = DynCaller::define_function(&format!("{LIBC}|atof|cstr|f64|")).unwrap();
         let mut inv = def.prep();
-        inv.push_script_val(ScriptVal::Str("3.14".to_string())).unwrap();
+        inv.push_script_val(ScriptVal::Str("2.5".to_string())).unwrap();
         let result = inv.call_scripted().unwrap();
         if let ScriptVal::Number(f) = result.return_val {
-            assert!((f - 3.14).abs() < 0.01, "expected ~3.14, got {f}");
+            assert!((f - 2.5).abs() < 0.01, "expected ~2.5, got {f}");
         } else {
             panic!("expected Number, got {:?}", result.return_val);
         }
@@ -1177,6 +1167,7 @@ mod test {
 
     /// #2: ADAPTER_GUIDE.md promises FuncDef is Send + Sync.
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_funcdef_is_send_sync() {
         use std::marker::PhantomData;
         #[allow(dead_code)]
@@ -1359,5 +1350,82 @@ mod test {
         let r = inv.call_scripted().unwrap();
         let sv = r.return_struct.expect("localeconv() returned no struct");
         assert_eq!(sv.read_field::<String>(0).unwrap(), ".");
+    }
+
+    /// #9: a `cstr` return from `call()` is an owned `ArgVal::Str`.
+    #[test]
+    fn test_call_cstr_return_is_owned_string() {
+        let def = DynCaller::define_function(&format!("{LIBC}|strerror|i32|cstr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&22i32).unwrap();
+        let ret = inv.call().unwrap();
+        assert!(!ret.as_str().unwrap().is_empty());
+    }
+
+    /// #9/#12: a NULL `cstr` return from `call()` is a null pointer, not a string.
+    #[test]
+    fn test_call_null_cstr_return_is_null_pointer() {
+        let def = DynCaller::define_function(&format!("{LIBC}|getenv|cstr|cstr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"DYNCALL_SURELY_UNSET_VAR_12345".to_string()).unwrap();
+        let ret = inv.call().unwrap();
+        assert!(ret.as_pointer().unwrap().is_null());
+    }
+
+    /// #17: variadic arguments must be declared with their promoted types.
+    #[test]
+    fn test_variadic_promoted_types_enforced() {
+        for bad in ["f32", "u8", "i8", "i16", "u16"] {
+            let r = DynCaller::define_function(&format!("{LIBC}|printf|cstr,{bad}|i32|fixargs=1"));
+            assert!(r.is_err(), "variadic {bad} accepted");
+        }
+        for good in ["f64", "i32", "u32", "i64", "ptr", "cstr"] {
+            let r = DynCaller::define_function(&format!("{LIBC}|printf|cstr,{good}|i32|fixargs=1"));
+            assert!(r.is_ok(), "variadic {good} rejected");
+        }
+    }
+
+    /// #17: fixargs larger than the argument count is an error.
+    #[test]
+    fn test_fixargs_exceeding_arg_count_rejected() {
+        let r = DynCaller::define_function(&format!("{LIBC}|printf|cstr|i32|fixargs=3"));
+        assert!(r.is_err());
+    }
+
+    /// #8: oversized output buffer lengths are rejected, not allocated.
+    #[test]
+    fn test_huge_length_arg_is_error() {
+        let lib = struct_fixture_path();
+        let def =
+            DynCaller::define_function(&format!("{lib}|ptr_addr_low|ocstr=arg1,i32|u32|")).unwrap();
+        let mut inv = def.prep();
+        let mut s = String::new();
+        inv.push_mut_arg(&mut s).unwrap();
+        inv.push_arg(&i32::MAX).unwrap();
+        assert!(inv.call().is_err());
+    }
+
+    /// #7: an ocstr whose callee writes nothing leaves a valid, empty String.
+    #[test]
+    fn test_ocstr_untouched_buffer_is_empty() {
+        let lib = struct_fixture_path();
+        let def =
+            DynCaller::define_function(&format!("{lib}|ptr_addr_low|ocstr=16,i32|u32|")).unwrap();
+        let mut inv = def.prep();
+        let mut s = String::new();
+        inv.push_mut_arg(&mut s).unwrap();
+        inv.push_arg(&0i32).unwrap();
+        inv.call().unwrap();
+        assert_eq!(s, "");
+    }
+
+    /// #13: i8 arguments round-trip with their sign.
+    #[test]
+    fn test_i8_argument_is_signed() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|coerce")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&-3i8).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Integer(3));
     }
 }

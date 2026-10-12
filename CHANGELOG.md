@@ -26,9 +26,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NULL/zero). `ScriptResult` now has a `return_struct: Option<StructValue>`
   field carrying it.
 
+- `push_mut_arg` now takes `&'a mut T` tied to the `Invocation`'s lifetime, so
+  the borrow checker rejects dropping or reading a value before `call()`.
+  `CStr` arguments are copied rather than borrowed. **Breaking:** code that read
+  or dropped an output value before the invocation's last use no longer compiles. (#3)
+- `ocstr` output buffers are zero-filled before the call and decoded lossily to
+  UTF-8 afterwards: no uninitialised reads, no invalid `String`s. (#6)
+- `ocstr` without a length is rejected by `define_function`; `argK` length
+  references must name another integer argument. (#7, #8)
+- Output buffer lengths are checked: negative values, values above 256 MiB and
+  oversized argument indices return `Err` instead of panicking or aborting. (#8)
+- `call()` returns `cstr` results as an owned `ArgVal::Str` (no more leaked
+  `*mut String`). A NULL `const char *` is returned as a null `ArgVal::Pointer`
+  / `ScriptVal::Nil` instead of an empty string. (#9, #12)
+- Library load errors name the library (and symbol) and use readable OS
+  messages on Windows; stale `dlerror` state is cleared. (#11)
+- `i8` is now a distinct signed type (`ArgType::I8`, `ArgVal::I8`); `u8` stays
+  unsigned and coerced reads of `u8` no longer sign-extend. (#13)
+- New type tokens: `usize`/`size_t`, `isize`/`ssize_t`, `clong`, `culong`, `bool`. (#14)
+- With the `errno` flag the platform error code is reset before the call, so a
+  successful call no longer reports a stale value. (#15)
+- Added `FuncDef::arg_type` (non-panicking); `FuncDef::create_struct` /
+  `Invocation::create_struct` return `Err` for an out-of-range index. (#16)
+- Variadic arguments declared as `f32`, `u8`/`i8` or 16-bit integers (which C
+  promotes) are rejected, as is `fixargs` larger than the argument count. (#17)
+- Removed the unused, unsound `DynamicLibrary::prepend_search_path`. (#10)
+- MSRV raised to 1.82 (the code already required `&raw`).
+
+### Documentation (review follow-up)
+- Added a "Safety and trust" section; fixed the README `call_and_return` and
+  `call()` examples, the rustdoc warnings and the "consumed" wording. (#10, #18)
+
+### Repository
+- Untracked `session`, `test.txt`, `src/test.txt` and `.vscode/`; added a
+  package `exclude` list; CI now runs on macOS too and has clippy, rustdoc and
+  MSRV jobs. (#19)
+
 ### Tests
-- Added regression tests for the code-review findings (#1, #2, #4–#8, #11–#13,
-  #14–#16). Those for still-open issues fail until the fixes land.
+- Added regression tests for the code-review findings (#1–#9, #11–#17).
 
 ### Changed
 - `LengthDef::Arg` now accepts all integer-width length arguments (`u8`/`i8` via

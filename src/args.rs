@@ -27,6 +27,9 @@ pub enum ArgVal {
     U16(u16),
     F32(f32),
     Char(u8),
+    I8(i8),
+    /// An owned string, returned for `cstr` return types.
+    Str(String),
     CString(CString),
     RustString(*mut String),
     ByteBuffer(*mut Vec<u8>),
@@ -59,8 +62,10 @@ pub enum ArgType {
     I16,
     U16,
     F32,
-    /// Single byte (`u8` / `i8`).
+    /// Unsigned single byte (`u8` / `bool`).
     Char,
+    /// Signed single byte (`i8`).
+    I8,
 
     // ── complex types ─────────────────────────────────────────────────────
     /// Input null-terminated C string (`const char *`). Push with a `String`.
@@ -136,6 +141,7 @@ impl ArgVal {
             F64(ref val) => val as *const _ as *mut c_void,
             I64(ref val) => val as *const _ as *mut c_void,
             Char(ref val) => val as *const _ as *mut c_void,
+            I8(ref val) => val as *const _ as *mut c_void,
             // Safety: callers (ToArg/ToMutArg impls) must never push CString,
             // RustString, ByteBuffer, or None into arg_vals directly.
             _ => unreachable!("ArgVal variant {:?} has no fixed-size FFI payload", self),
@@ -259,16 +265,14 @@ impl ToArg for CStr {
 
         match &arg_type {
             ArgType::CString => {
-                let ptr = self.as_ptr();
-                log::trace!("CStr to_arg: {:x}", ptr as u64);
-                let p = unsafe { mem::transmute::<*const i8, *mut c_void>(ptr) };
-                func.arg_vals.push(ArgVal::Pointer(p));
-                func.arg_vals.push(ArgVal::Pointer(p));
-                let pp = &func.arg_vals[func.arg_vals.len() - 1];
-                log::trace!("CStr to_arg ArgVal ptr: {:p}", pp);
-                let ArgVal::Pointer(ref ppp) = pp else { unreachable!() };
-                log::trace!("CStr to_arg final ptr: {:p}", ppp);
-                Ok(ppp as *const *mut c_void as *mut c_void)
+                // Copy so the invocation owns the bytes: a borrowed pointer
+                // could dangle if the caller drops the CStr before `call()`.
+                let cstr = self.to_owned();
+                let buffer = cstr.as_ptr() as *mut c_void;
+                func.arg_vals.push(ArgVal::Pointer(buffer));
+                func.arg_vals.push(ArgVal::CString(cstr));
+                let pbuff = &func.arg_vals[func.arg_vals.len() - 2];
+                Ok(pbuff.payload_ptr())
             }
             _ if func.func_def.inner.coerce => {
                 let cstr = self.to_owned();
@@ -334,7 +338,7 @@ impl_to_arg_int!(i32, I32,  I32);
 impl_to_arg_int!(u16, U16,  U16);
 impl_to_arg_int!(i16, I16,  I16);
 impl_to_arg_int!(u8,  Char, Char);
-impl_to_arg_int!(i8,  Char, Char);
+impl_to_arg_int!(i8,  I8,   I8);
 impl_to_arg_float!(f64, F64, F64);
 impl_to_arg_float!(f32, F32, F32);
 /// Push an [`ArgVal`] as the next argument, checking it against the declared
@@ -343,14 +347,16 @@ fn push_argval(val: &ArgVal, func: &mut Invocation) -> Result<*mut c_void> {
     match val {
         ArgVal::None => bail!("ArgVal::None cannot be passed as a function argument"),
         ArgVal::CString(_) => bail!("ArgVal::CString cannot be passed directly; use a String or CStr"),
-        ArgVal::RustString(_) | ArgVal::ByteBuffer(_) => {
-            bail!("internal ArgVal variant cannot be passed as a direct argument")
+        ArgVal::RustString(_) | ArgVal::ByteBuffer(_) | ArgVal::Str(_) => {
+            bail!("ArgVal::Str / internal variants cannot be passed as a direct argument; use a String")
         }
         _ => {}
     }
     let declared = func.func_def.inner.arg_types[func.arg_ptrs.len()].clone();
-    let matches_declared = match (&declared, val) {
+    let matches_declared = matches!(
+        (&declared, val),
         (ArgType::Char, ArgVal::Char(_))
+        | (ArgType::I8, ArgVal::I8(_))
         | (ArgType::I16, ArgVal::I16(_))
         | (ArgType::U16, ArgVal::U16(_))
         | (ArgType::I32, ArgVal::I32(_))
@@ -359,8 +365,8 @@ fn push_argval(val: &ArgVal, func: &mut Invocation) -> Result<*mut c_void> {
         | (ArgType::U64, ArgVal::U64(_))
         | (ArgType::F32, ArgVal::F32(_))
         | (ArgType::F64, ArgVal::F64(_))
-        | (ArgType::Struct(_), ArgVal::StructValue(_)) => true,
-        (
+        | (ArgType::Struct(_), ArgVal::StructValue(_))
+        | (
             ArgType::OpaquePointer
             | ArgType::CString
             | ArgType::OCString(_)
@@ -368,9 +374,8 @@ fn push_argval(val: &ArgVal, func: &mut Invocation) -> Result<*mut c_void> {
             | ArgType::OByteBuffer(_)
             | ArgType::Pointer(_),
             ArgVal::Pointer(_),
-        ) => true,
-        _ => false,
-    };
+        )
+    );
     let is_pointer_decl = matches!(
         declared,
         ArgType::OpaquePointer
@@ -402,6 +407,7 @@ fn push_argval(val: &ArgVal, func: &mut Invocation) -> Result<*mut c_void> {
         if func.func_def.inner.coerce {
             match val {
                 ArgVal::Char(v) => return crate::coerce::push_coerced_int(func, *v as i64, &declared),
+                ArgVal::I8(v) => return crate::coerce::push_coerced_int(func, *v as i64, &declared),
                 ArgVal::I16(v) => return crate::coerce::push_coerced_int(func, *v as i64, &declared),
                 ArgVal::U16(v) => return crate::coerce::push_coerced_int(func, *v as i64, &declared),
                 ArgVal::I32(v) => return crate::coerce::push_coerced_int(func, *v as i64, &declared),

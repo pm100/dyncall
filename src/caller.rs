@@ -69,7 +69,9 @@ unsafe impl Sync for FuncDefInner {}
 impl FuncDef {
     /// Create an [`Invocation`] ready to accept arguments for this function.
     ///
-    /// Call this once per invocation; the `Invocation` is consumed by the call.
+    /// Create one `Invocation` per call. An `Invocation` can technically be
+    /// reused after `call`, but its output slots are only meaningful for a
+    /// single call.
     pub fn prep(&self) -> Invocation<'_> {
         Invocation {
             func_def: self,
@@ -93,8 +95,18 @@ impl FuncDef {
     /// type before deciding which value to supply — for example, converting a
     /// dynamic script value to the right Rust type before calling
     /// [`Invocation::push_arg`].
+    ///
+    /// # Panics
+    /// Panics if `index >= self.get_arg_count()`. Use [`arg_type`](FuncDef::arg_type)
+    /// for a non-panicking lookup.
     pub fn get_arg_type(&self, index: usize) -> &ArgType {
         &self.inner.arg_types[index]
+    }
+
+    /// Non-panicking variant of [`get_arg_type`](FuncDef::get_arg_type): returns
+    /// `None` if `index` is out of range.
+    pub fn arg_type(&self, index: usize) -> Option<&ArgType> {
+        self.inner.arg_types.get(index)
     }
     /// Returns the declared return [`ArgType`].
     pub fn get_return_type(&self) -> &ArgType {
@@ -110,7 +122,14 @@ impl FuncDef {
     ///
     /// This is intended for arguments declared as `{...}` or `*{...}`.
     pub fn create_struct(&self, index: usize) -> Result<StructValue> {
-        StructValue::new(self.get_arg_type(index))
+        let arg_type = self.arg_type(index).ok_or_else(|| {
+            anyhow!(
+                "argument index {} is out of range (function takes {})",
+                index,
+                self.get_arg_count()
+            )
+        })?;
+        StructValue::new(arg_type)
     }
 }
 
@@ -153,6 +172,7 @@ impl FfiTypeStore {
     fn ffi_type_for(&mut self, arg_type: &ArgType) -> Result<*mut ffi_type> {
         Ok(match arg_type {
             ArgType::Char => &raw mut types::uint8,
+            ArgType::I8 => &raw mut types::sint8,
             ArgType::U16 => &raw mut types::uint16,
             ArgType::I16 => &raw mut types::sint16,
             ArgType::U32 => &raw mut types::uint32,
@@ -203,7 +223,8 @@ impl DynCaller {
 
     fn get_lib(&mut self, lib_name: &str) -> Result<DynamicLibrary> {
         if !self.libs.contains_key(lib_name) {
-            let lib = DynamicLibrary::open(Some(Path::new(lib_name)))?;
+            let lib = DynamicLibrary::open(Some(Path::new(lib_name)))
+                .map_err(|e| anyhow!("failed to load library '{}': {}", lib_name, e))?;
             self.libs.insert(lib_name.to_string(), lib);
         }
         Ok(self.libs[lib_name].clone())
@@ -215,7 +236,8 @@ impl DynCaller {
         entry_point_name: &str,
     ) -> Result<*mut ffi::c_void> {
         let lib = self.get_lib(lib_name)?;
-        let ep = unsafe { lib.symbol(entry_point_name)? };
+        let ep = unsafe { lib.symbol(entry_point_name) }
+            .map_err(|e| anyhow!("in library '{}': {}", lib_name, e))?;
         Ok(ep)
     }
     /// Parse a function descriptor string, load the library, and return a [`FuncDef`].
@@ -253,6 +275,8 @@ impl DynCaller {
         let entry_point_name = funcdef[1];
         let args_str = funcdef[2];
         let my_arg_types = parse_arg_types(args_str)?;
+        let flags = Self::parse_flags(funcdef[4])?;
+        validate_signature(&my_arg_types, &flags)?;
         let mut ffi_store = FfiTypeStore::new();
         let ffi_arg_types = my_arg_types
             .iter()
@@ -270,8 +294,6 @@ impl DynCaller {
             .unwrap_or_else(|p| p.into_inner())
             .get_entry_point(lib_name, entry_point_name)?;
         let entry_point = unsafe { std::mem::transmute::<*mut ffi::c_void, unsafe extern "C" fn()>(ep) };
-        let flag_str = funcdef[4];
-        let flags = Self::parse_flags(flag_str)?;
         let coerce =
             flags.coerce || DYNCALLER.lock().unwrap_or_else(|p| p.into_inner()).default_coerce;
         let mut cif = ffi_cif::default();
@@ -365,6 +387,66 @@ impl DynCaller {
     }
 }
 
+fn is_integer_type(t: &ArgType) -> bool {
+    matches!(
+        t,
+        ArgType::Char
+            | ArgType::I8
+            | ArgType::I16
+            | ArgType::U16
+            | ArgType::I32
+            | ArgType::U32
+            | ArgType::I64
+            | ArgType::U64
+    )
+}
+
+/// Reject descriptors that would be unsafe or meaningless to call.
+fn validate_signature(args: &[ArgType], flags: &Flags) -> Result<()> {
+    for (i, arg) in args.iter().enumerate() {
+        match arg {
+            ArgType::OCString(LengthDef::None) => {
+                bail!("argument {}: ocstr needs a buffer length (ocstr=N or ocstr=argK)", i)
+            }
+            ArgType::OCString(LengthDef::Arg(k)) | ArgType::OByteBuffer(LengthDef::Arg(k)) => {
+                let k = *k as usize;
+                match args.get(k) {
+                    None => bail!(
+                        "argument {}: length argument arg{} is out of range ({} arguments)",
+                        i,
+                        k,
+                        args.len()
+                    ),
+                    Some(_) if k == i => bail!("argument {}: length argument refers to itself", i),
+                    Some(t) if !is_integer_type(t) => {
+                        bail!("argument {}: length argument arg{} is not an integer type", i, k)
+                    }
+                    Some(_) => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    if flags.has_fixed_args {
+        let fixed = flags.fixed_args as usize;
+        if fixed > args.len() {
+            bail!("fixargs={} exceeds the {} declared arguments", fixed, args.len());
+        }
+        // C promotes these when passed through `...`; declaring them as variadic
+        // arguments would pass the wrong width.
+        for (i, arg) in args.iter().enumerate().skip(fixed) {
+            if matches!(arg, ArgType::F32 | ArgType::Char | ArgType::I8 | ArgType::I16 | ArgType::U16) {
+                bail!(
+                    "variadic argument {} is declared as {:?}, which C promotes; use f64 for floats or i32/u32 for small integers",
+                    i,
+                    arg
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_def(def: &str) -> (&str, Option<&str>) {
 
     let parts = def.split('=').collect::<Vec<&str>>();
@@ -395,13 +477,28 @@ fn parse_arg_type(at: &str) -> Result<ArgType> {
 
     let (parsed_arg, qualifier) = parse_def(at);
     Ok(match parsed_arg.trim() {
-        "u8" | "i8" => ArgType::Char,
+        "u8" | "bool" => ArgType::Char,
+        "i8" => ArgType::I8,
         "u16" => ArgType::U16,
         "i16" => ArgType::I16,
         "u32" => ArgType::U32,
         "i32" => ArgType::I32,
         "u64" => ArgType::U64,
         "i64" => ArgType::I64,
+        // Portable C types whose width depends on the target.
+        "usize" | "size_t" => {
+            if cfg!(target_pointer_width = "64") { ArgType::U64 } else { ArgType::U32 }
+        }
+        "isize" | "ssize_t" => {
+            if cfg!(target_pointer_width = "64") { ArgType::I64 } else { ArgType::I32 }
+        }
+        // C `long`: 32-bit on Windows and 32-bit targets, 64-bit on LP64 Unix.
+        "clong" => {
+            if cfg!(any(windows, target_pointer_width = "32")) { ArgType::I32 } else { ArgType::I64 }
+        }
+        "culong" => {
+            if cfg!(any(windows, target_pointer_width = "32")) { ArgType::U32 } else { ArgType::U64 }
+        }
         "f32" => ArgType::F32,
         "f64" => ArgType::F64,
         "ptr" => ArgType::OpaquePointer,

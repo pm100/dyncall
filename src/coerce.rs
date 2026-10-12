@@ -21,6 +21,7 @@ pub fn push_coerced_int(
 ) -> Result<*mut c_void> {
     match declared {
         ArgType::Char => push_pair(func, ArgVal::Char(val as u8)),
+        ArgType::I8 => push_pair(func, ArgVal::I8(val as i8)),
         ArgType::I16 => push_pair(func, ArgVal::I16(val as i16)),
         ArgType::U16 => push_pair(func, ArgVal::U16(val as u16)),
         ArgType::I32 => push_pair(func, ArgVal::I32(val as i32)),
@@ -55,6 +56,7 @@ pub fn push_coerced_float(
 ) -> Result<*mut c_void> {
     match declared {
         ArgType::Char => push_pair(func, ArgVal::Char(val as u8)),
+        ArgType::I8 => push_pair(func, ArgVal::I8(val as i8)),
         ArgType::I16 => push_pair(func, ArgVal::I16(val as i16)),
         ArgType::U16 => push_pair(func, ArgVal::U16(val as u16)),
         ArgType::I32 => push_pair(func, ArgVal::I32(val as i32)),
@@ -85,7 +87,7 @@ pub fn push_coerced_str(
             let b = val.as_bytes().first().copied().unwrap_or(0);
             push_pair(func, ArgVal::Char(b))
         }
-        ArgType::I16 | ArgType::I32 | ArgType::I64 => {
+        ArgType::I8 | ArgType::I16 | ArgType::I32 | ArgType::I64 => {
             let s = val.to_str().map_err(|e| anyhow::anyhow!(e))?;
             let n: i64 = s
                 .trim()

@@ -2,12 +2,13 @@
 name = "dyncall"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.82"
 description = "Call functions in dynamic libraries at runtime without compile-time signature knowledge. Wraps libffi for scripting language interpreters and other dynamic dispatch use cases."
 license = "MIT"
 repository = "https://github.com/pm100/dyncall"
 keywords = ["ffi", "libffi", "dynamic", "scripting", "interop"]
 categories = ["api-bindings", "external-ffi-bindings"]
+exclude = [".github", ".vscode", "session", "test.txt", "src/test.txt", "agents.md", "AGENTS.md", "copilot-session-*.md"]
 
 [dependencies]
 anyhow = "1.0.81"
