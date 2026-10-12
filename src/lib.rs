@@ -20,9 +20,12 @@
 //! `LazyLock<Mutex<DynCaller>>`; each call acquires the lock only for the
 //! library-load and symbol-lookup phase, before the `ffi_cif` is prepared.
 //!
+//! [`FuncDef`] is a cheap reference-counted handle that is `Clone + Send + Sync`:
+//! define a function once and share it across threads.
+//!
 //! [`Invocation`] is **not** `Send` or `Sync` — it must be used on the thread
-//! that created it. Each thread should call [`FuncDef::prep`] independently to
-//! obtain its own `Invocation`.
+//! that created it. Each thread should call [`FuncDef::prep`] on the shared
+//! `FuncDef` to obtain its own `Invocation`.
 //!
 //!
 //! ## Function descriptor format

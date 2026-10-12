@@ -3,8 +3,7 @@ use std::path::Path;
 use std::ptr;
 
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail};
@@ -32,20 +31,41 @@ pub struct DynCaller {
 
 /// A compiled, reusable definition of a foreign function.
 ///
-/// Created by [`DynCaller::define_function`]. A `FuncDef` is cheap to
-/// clone and can be used to create multiple independent [`Invocation`]s.
+/// Created by [`DynCaller::define_function`]. A `FuncDef` is a cheap,
+/// reference-counted handle: cloning shares the same prepared call interface,
+/// and it is `Send + Sync`, so it can be stored in shared interpreter state and
+/// used to create multiple independent [`Invocation`]s from any thread.
 #[derive(Clone)]
 pub struct FuncDef {
+    pub(crate) inner: Arc<FuncDefInner>,
+}
+
+/// The immutable, heap-pinned state behind a [`FuncDef`].
+///
+/// Everything the `ffi_cif` points at (argument type array, owned struct
+/// types) lives in this allocation, so the pointers stay valid for as long as
+/// any `FuncDef` handle exists.
+pub(crate) struct FuncDefInner {
     pub(crate) cif: ffi_cif,
     pub(crate) entry_point: unsafe extern "C" fn(),
+    /// Owns the array `cif.arg_types` points at; must outlive the cif.
+    #[allow(dead_code)]
     pub(crate) ffi_arg_types: Vec<*mut ffi_type>,
-    pub(crate) ffi_return_type: ffi_type,
-    _ffi_owned_types: Rc<Vec<OwnedStructFfiType>>,
+    /// Points at a libffi-owned static type (never a copy).
+    pub(crate) ffi_return_type: *mut ffi_type,
+    _ffi_owned_types: Vec<OwnedStructFfiType>,
     pub(crate) arg_types: Vec<ArgType>,
     pub(crate) return_type: ArgType,
     pub(crate) coerce: bool,
     pub(crate) capture_errno: bool,
 }
+
+// SAFETY: after `define_function` finishes, `FuncDefInner` is never mutated.
+// The raw pointers refer either to libffi's immutable static type descriptors
+// or to heap data owned by this same struct, and `ffi_call` only reads the cif.
+unsafe impl Send for FuncDefInner {}
+unsafe impl Sync for FuncDefInner {}
+
 impl FuncDef {
     /// Create an [`Invocation`] ready to accept arguments for this function.
     ///
@@ -53,8 +73,8 @@ impl FuncDef {
     pub fn prep(&self) -> Invocation<'_> {
         Invocation {
             func_def: self,
-            arg_ptrs: Vec::with_capacity(self.arg_types.len()),
-            arg_vals: Vec::with_capacity(self.arg_types.len() * 4),
+            arg_ptrs: Vec::with_capacity(self.inner.arg_types.len()),
+            arg_vals: Vec::with_capacity(self.inner.arg_types.len() * 4),
             last_errno: None,
             script_output_slots: Vec::new(),
         }
@@ -65,7 +85,7 @@ impl FuncDef {
     /// validate that the right number of arguments will be pushed before
     /// calling [`Invocation::call`].
     pub fn get_arg_count(&self) -> usize {
-        self.arg_types.len()
+        self.inner.arg_types.len()
     }
     /// Returns the declared [`ArgType`] for the argument at `index`.
     ///
@@ -74,16 +94,16 @@ impl FuncDef {
     /// dynamic script value to the right Rust type before calling
     /// [`Invocation::push_arg`].
     pub fn get_arg_type(&self, index: usize) -> &ArgType {
-        &self.arg_types[index]
+        &self.inner.arg_types[index]
     }
     /// Returns the declared return [`ArgType`].
     pub fn get_return_type(&self) -> &ArgType {
-        &self.return_type
+        &self.inner.return_type
     }
 
     /// Returns `true` if type coercion is enabled for this function.
     pub fn is_coerce(&self) -> bool {
-        self.coerce
+        self.inner.coerce
     }
 
     /// Create an empty [`StructValue`] for the declared argument at `index`.
@@ -162,8 +182,8 @@ impl FfiTypeStore {
         })
     }
 
-    fn into_arc(self) -> Rc<Vec<OwnedStructFfiType>> {
-        Rc::new(self.owned_structs)
+    fn into_owned(self) -> Vec<OwnedStructFfiType> {
+        self.owned_structs
     }
 }
 
@@ -251,44 +271,49 @@ impl DynCaller {
             .get_entry_point(lib_name, entry_point_name)?;
         let entry_point = unsafe { std::mem::transmute::<*mut ffi::c_void, unsafe extern "C" fn()>(ep) };
         let flag_str = funcdef[4];
-        let mut func = FuncDef {
-            cif: ffi_cif::default(),
-            entry_point,
-            ffi_arg_types,
-            ffi_return_type: unsafe { *ffi_ret },
-            _ffi_owned_types: ffi_store.into_arc(),
-            arg_types: my_arg_types,
-            return_type: my_ret,
-            coerce: false,
-            capture_errno: false,
-        };
         let flags = Self::parse_flags(flag_str)?;
-        func.coerce = flags.coerce || DYNCALLER.lock().unwrap_or_else(|p| p.into_inner()).default_coerce;
-        func.capture_errno = flags.capture_errno;
+        let coerce =
+            flags.coerce || DYNCALLER.lock().unwrap_or_else(|p| p.into_inner()).default_coerce;
+        let mut cif = ffi_cif::default();
+        // The cif keeps raw pointers to `ffi_arg_types`' heap buffer, the struct
+        // types in `ffi_store` (each boxed) and the libffi static `ffi_ret`.
+        // All of those stay put when moved into the `Arc` below.
         unsafe {
             if flags.has_fixed_args {
                 prep_cif_var(
-                    &mut func.cif,
+                    &mut cif,
                     ffi_abi_FFI_DEFAULT_ABI,
                     flags.fixed_args as usize,
                     arg_count as usize,
-                    &mut func.ffi_return_type,
-                    func.ffi_arg_types.as_ptr() as *mut *mut ffi_type,
+                    ffi_ret,
+                    ffi_arg_types.as_ptr() as *mut *mut ffi_type,
                 )
                 .map_err(|e| anyhow!(format!("{:?}", e)))?;
             } else {
                 prep_cif(
-                    &mut func.cif,
+                    &mut cif,
                     ffi_abi_FFI_DEFAULT_ABI,
                     arg_count as usize,
-                    &mut func.ffi_return_type,
-                    func.ffi_arg_types.as_ptr() as *mut *mut ffi_type,
+                    ffi_ret,
+                    ffi_arg_types.as_ptr() as *mut *mut ffi_type,
                 )
                 .map_err(|e| anyhow!(format!("{:?}", e)))?;
             }
         };
 
-        Ok(func)
+        Ok(FuncDef {
+            inner: Arc::new(FuncDefInner {
+                cif,
+                entry_point,
+                ffi_arg_types,
+                ffi_return_type: ffi_ret,
+                _ffi_owned_types: ffi_store.into_owned(),
+                arg_types: my_arg_types,
+                return_type: my_ret,
+                coerce,
+                capture_errno: flags.capture_errno,
+            }),
+        })
     }
     /// Set or clear the process-wide default coerce flag.
     ///

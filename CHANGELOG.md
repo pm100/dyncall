@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `FuncDef` no longer leaves dangling pointers in its `ffi_cif` after being
+  cloned or moved (use-after-free). The cif, argument-type array and struct
+  types now live in one `Arc`-owned allocation, and the return type points at
+  libffi's static type instead of a moved copy. (#1)
+- `FuncDef` is now genuinely `Clone + Send + Sync`, matching `ADAPTER_GUIDE.md`.
+  Cloning is a cheap reference-count bump. (#2)
+
+### Tests
+- Added regression tests for the code-review findings (#1, #2, #4–#8, #11–#13,
+  #14–#16). Those for still-open issues fail until the fixes land.
+
 ### Changed
 - `LengthDef::Arg` now accepts all integer-width length arguments (`u8`/`i8` via
   `Char`, `u16`, `i16`) in addition to `u32`/`i32`/`u64`/`i64`.

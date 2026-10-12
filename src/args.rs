@@ -164,7 +164,7 @@ pub trait ToMutArg {
 impl ToMutArg for String {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
         let arg_idx = func.arg_ptrs.len();
-        let arg_type = &func.func_def.arg_types[arg_idx];
+        let arg_type = &func.func_def.inner.arg_types[arg_idx];
 
         match arg_type {
             ArgType::OCString(_ldef) => {
@@ -188,7 +188,7 @@ impl ToMutArg for String {
 impl ToArg for String {
     fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
         let arg_idx = func.arg_ptrs.len();
-        let arg_type = func.func_def.arg_types[arg_idx].clone();
+        let arg_type = func.func_def.inner.arg_types[arg_idx].clone();
 
         match &arg_type {
             ArgType::CString => {
@@ -200,7 +200,7 @@ impl ToArg for String {
                 let pbuff = &func.arg_vals[func.arg_vals.len() - 2];
                 Ok(pbuff.payload_ptr())
             }
-            _ if func.func_def.coerce => {
+            _ if func.func_def.inner.coerce => {
                 let cstr = CString::new(self.as_str())
                     .map_err(|e| anyhow::anyhow!("Invalid string for coercion: {}", e))?;
                 crate::coerce::push_coerced_str(func, cstr, &arg_type)
@@ -212,7 +212,7 @@ impl ToArg for String {
 impl ToMutArg for Vec<u8> {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
         let arg_idx = func.arg_ptrs.len();
-        let arg_type = &func.func_def.arg_types[arg_idx];
+        let arg_type = &func.func_def.inner.arg_types[arg_idx];
 
         match arg_type {
             ArgType::OByteBuffer(_ldef) => {
@@ -229,7 +229,7 @@ impl ToMutArg for Vec<u8> {
 impl ToArg for StructValue {
     fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
         let arg_idx = func.arg_ptrs.len();
-        let arg_type = &func.func_def.arg_types[arg_idx];
+        let arg_type = &func.func_def.inner.arg_types[arg_idx];
 
         match arg_type {
             ArgType::Struct(_) => {
@@ -245,7 +245,7 @@ impl ToArg for StructValue {
 impl ToArg for CStr {
     fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
         let arg_idx = func.arg_ptrs.len();
-        let arg_type = func.func_def.arg_types[arg_idx].clone();
+        let arg_type = func.func_def.inner.arg_types[arg_idx].clone();
 
         match &arg_type {
             ArgType::CString => {
@@ -260,7 +260,7 @@ impl ToArg for CStr {
                 log::trace!("CStr to_arg final ptr: {:p}", ppp);
                 Ok(ppp as *const *mut c_void as *mut c_void)
             }
-            _ if func.func_def.coerce => {
+            _ if func.func_def.inner.coerce => {
                 let cstr = self.to_owned();
                 crate::coerce::push_coerced_str(func, cstr, &arg_type)
             }
@@ -279,13 +279,13 @@ macro_rules! impl_to_arg_int {
         impl ToArg for $rust_ty {
             fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
                 let arg_idx = func.arg_ptrs.len();
-                let declared = func.func_def.arg_types[arg_idx].clone();
+                let declared = func.func_def.inner.arg_types[arg_idx].clone();
                 if matches!(declared, ArgType::$arg_type_pat) {
                     func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
                     func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
                     let pp = &func.arg_vals[func.arg_vals.len() - 1];
                     Ok(pp.payload_ptr())
-                } else if func.func_def.coerce {
+                } else if func.func_def.inner.coerce {
                     crate::coerce::push_coerced_int(func, *self as i64, &declared)
                 } else {
                     bail!("Type mismatch: expected {:?}, got {}", declared, stringify!($rust_ty))
@@ -301,13 +301,13 @@ macro_rules! impl_to_arg_float {
         impl ToArg for $rust_ty {
             fn to_arg(&self, func: &mut Invocation) -> Result<*mut c_void> {
                 let arg_idx = func.arg_ptrs.len();
-                let declared = func.func_def.arg_types[arg_idx].clone();
+                let declared = func.func_def.inner.arg_types[arg_idx].clone();
                 if matches!(declared, ArgType::$arg_type_pat) {
                     func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
                     func.arg_vals.push(ArgVal::$arg_val_ctor(*self as _));
                     let pp = &func.arg_vals[func.arg_vals.len() - 1];
                     Ok(pp.payload_ptr())
-                } else if func.func_def.coerce {
+                } else if func.func_def.inner.coerce {
                     crate::coerce::push_coerced_float(func, *self as f64, &declared)
                 } else {
                     bail!("Type mismatch: expected {:?}, got {}", declared, stringify!($rust_ty))
@@ -389,7 +389,7 @@ impl_to_mut_arg_primitive!(f64);
 impl ToMutArg for StructValue {
     fn to_mut_arg(&mut self, func: &mut Invocation) -> Result<*mut c_void> {
         let arg_idx = func.arg_ptrs.len();
-        let arg_type = &func.func_def.arg_types[arg_idx];
+        let arg_type = &func.func_def.inner.arg_types[arg_idx];
 
         match arg_type {
             ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {

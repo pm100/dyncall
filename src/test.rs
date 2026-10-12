@@ -1152,4 +1152,202 @@ mod test {
         let result = inv.call_scripted().unwrap();
         assert_eq!(result.return_val, ScriptVal::Integer(7));
     }
+
+    // ── Regression tests for the issues found in the code review ──────────
+    // These assert the *correct* behaviour; each fails until the matching
+    // GitHub issue is fixed.
+
+    /// #1: a FuncDef's cif must point at storage that lives as long as the FuncDef.
+    #[test]
+    fn test_funcdef_cif_pointers_are_self_contained() {
+        use libffi::low::types;
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let cloned = def.clone();
+        assert_eq!(
+            cloned.inner.cif.arg_types as *const _,
+            cloned.inner.ffi_arg_types.as_ptr(),
+            "clone's cif.arg_types points into the original's storage"
+        );
+        assert_eq!(
+            def.inner.cif.rtype,
+            &raw mut types::sint32,
+            "cif.rtype must point at the libffi type, not a moved copy"
+        );
+    }
+
+    /// #2: ADAPTER_GUIDE.md promises FuncDef is Send + Sync.
+    #[test]
+    fn test_funcdef_is_send_sync() {
+        use std::marker::PhantomData;
+        #[allow(dead_code)]
+        trait Fallback {
+            const OK: bool = false;
+        }
+        impl<T> Fallback for T {}
+        struct Probe<T>(PhantomData<T>);
+        #[allow(dead_code)]
+        impl<T: Send + Sync> Probe<T> {
+            const OK: bool = true;
+        }
+        assert!(Probe::<crate::FuncDef>::OK, "FuncDef is not Send + Sync");
+    }
+
+    /// #4: ArgVal pushes must be checked against the declared type.
+    #[test]
+    fn test_argval_type_mismatch_rejected() {
+        use crate::ArgVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_arg(&ArgVal::I64(-5)).is_err(), "I64 accepted for i32");
+        let mut inv = def.prep();
+        assert!(inv.push_arg(&ArgVal::F64(1.0)).is_err(), "F64 accepted for i32");
+    }
+
+    /// #5: a StructValue with a different layout must be rejected.
+    #[test]
+    fn test_struct_layout_mismatch_rejected() {
+        use crate::{ArgType, StructType, StructValue};
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let small = StructType::new(vec![ArgType::U32]).unwrap();
+        let mut sv = StructValue::from_struct_type(&small);
+        sv.push_field(&1u32).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_arg(&sv).is_err(), "smaller struct accepted for {{u32,u32}}");
+    }
+
+    /// #5: a partially populated struct must be rejected.
+    #[test]
+    fn test_partial_struct_rejected() {
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let mut inv = def.prep();
+        let mut pair = inv.create_struct(0).unwrap();
+        pair.push_field(&10u32).unwrap();
+        assert!(inv.push_arg(&pair).is_err(), "struct with 1 of 2 fields accepted");
+    }
+
+    /// #6: ocstr output must never produce an invalid UTF-8 String.
+    #[test]
+    fn test_ocstr_output_is_valid_utf8() {
+        // memset(buf, 0xFF, 3): the String's initial NULs bound the strlen.
+        let def =
+            DynCaller::define_function(&format!("{LIBC}|memset|ocstr=3,i32,u64|ptr|")).unwrap();
+        let mut inv = def.prep();
+        let mut s = "\0\0\0\0".to_string();
+        inv.push_mut_arg(&mut s).unwrap();
+        inv.push_arg(&255i32).unwrap();
+        inv.push_arg(&3u64).unwrap();
+        let _ = inv.call();
+        assert!(std::str::from_utf8(s.as_bytes()).is_ok(), "ocstr produced invalid UTF-8");
+    }
+
+    /// #7: an output buffer with no length must be rejected up front. (Calling
+    /// one with an empty buffer currently crashes the process in
+    /// `post_process_args`, so this test checks the descriptor instead.)
+    #[test]
+    fn test_ocstr_without_length_rejected() {
+        let lib = struct_fixture_path();
+        let r = DynCaller::define_function(&format!("{lib}|ptr_addr_low|ocstr,i32|u32|"));
+        assert!(r.is_err(), "ocstr with no length accepted");
+    }
+
+    /// #8: a negative length argument must be an error, not a panic.
+    #[test]
+    fn test_negative_length_arg_is_error() {
+        let lib = struct_fixture_path();
+        let def =
+            DynCaller::define_function(&format!("{lib}|ptr_addr_low|ocstr=arg1,i32|u32|")).unwrap();
+        let mut inv = def.prep();
+        let mut s = String::new();
+        inv.push_mut_arg(&mut s).unwrap();
+        inv.push_arg(&-1i32).unwrap();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inv.call().is_err()));
+        assert_eq!(r.ok(), Some(true), "negative length should return Err without panicking");
+    }
+
+    /// #8: a length arg index beyond the argument list must be rejected up front.
+    #[test]
+    fn test_length_arg_index_out_of_range_rejected() {
+        let r = DynCaller::define_function(&format!("{LIBC}|memset|ocstr=arg5,i32,u64|ptr|"));
+        assert!(r.is_err(), "ocstr=arg5 accepted on a 3-arg function");
+    }
+
+    /// #11: a library load failure must name the library.
+    #[test]
+    fn test_load_error_names_library() {
+        let err = DynCaller::define_function("dyncall_no_such_lib_xyz|f||void|")
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("dyncall_no_such_lib_xyz"), "error was: {err}");
+    }
+
+    /// #12: a NULL `const char *` return must not look like an empty string.
+    #[test]
+    fn test_null_cstr_return_is_nil() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|getenv|cstr|cstr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"DYNCALL_SURELY_UNSET_VAR_12345".to_string()).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Nil);
+    }
+
+    /// #13: i8 return values keep their sign.
+    #[test]
+    fn test_i8_return_is_signed() {
+        use crate::ScriptVal;
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|neg_one_i8||i8|")).unwrap();
+        let mut inv = def.prep();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Integer(-1));
+    }
+
+    /// #13: coerced reads of a u8 field must not sign-extend.
+    #[test]
+    fn test_u8_field_coerced_read_is_unsigned() {
+        use crate::{ArgType, StructType, StructValue};
+        let st = StructType::new(vec![ArgType::Char]).unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field(&200u8).unwrap();
+        assert_eq!(sv.read_field_coerced::<i64>(0).unwrap(), 200);
+    }
+
+    /// #14: a portable size_t token.
+    #[test]
+    fn test_usize_type_token() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|strlen|cstr|usize|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_arg(&"hello".to_string()).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Integer(5));
+    }
+
+    /// #15: errno must be reset before the call so success doesn't report a stale value.
+    #[test]
+    fn test_errno_reset_before_call() {
+        let fail =
+            DynCaller::define_function(&format!("{LIBC}|fopen|cstr,cstr|ptr|errno")).unwrap();
+        let mut inv = fail.prep();
+        inv.push_arg(&"/this/path/does/not/exist/dyncall_test".to_string()).unwrap();
+        inv.push_arg(&"r".to_string()).unwrap();
+        inv.call().unwrap();
+        assert_ne!(inv.last_errno(), Some(0));
+
+        let ok = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|errno")).unwrap();
+        let mut inv = ok.prep();
+        inv.push_arg(&-1i32).unwrap();
+        inv.call().unwrap();
+        assert_eq!(inv.last_errno(), Some(0), "stale errno reported after a successful call");
+    }
+
+    /// #16: out-of-range index must be an error, not a panic.
+    #[test]
+    fn test_create_struct_out_of_range_is_error() {
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            def.create_struct(99).is_err()
+        }));
+        assert_eq!(r.ok(), Some(true), "create_struct(99) should return Err without panicking");
+    }
 }
