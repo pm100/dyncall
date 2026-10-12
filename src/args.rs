@@ -232,7 +232,17 @@ impl ToArg for StructValue {
         let arg_type = &func.func_def.inner.arg_types[arg_idx];
 
         match arg_type {
-            ArgType::Struct(_) => {
+            ArgType::Struct(declared) => {
+                if !declared.same_layout(self.struct_type()) {
+                    bail!("StructValue layout does not match the declared struct type");
+                }
+                if self.pushed_field_count() != self.field_count() {
+                    bail!(
+                        "struct argument is incomplete: {} of {} fields pushed",
+                        self.pushed_field_count(),
+                        self.field_count()
+                    );
+                }
                 func.arg_vals.push(ArgVal::StructValue(self.clone()));
                 func.arg_vals.push(ArgVal::StructValue(self.clone()));
                 let pp = &func.arg_vals[func.arg_vals.len() - 1];
@@ -455,6 +465,11 @@ impl ToMutArg for StructValue {
 
         match arg_type {
             ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
+                // Unpushed fields stay zero-initialised, so output-only structs
+                // may be passed unpopulated; the layout must still match.
+                if !inner.struct_type().is_some_and(|t| t.same_layout(self.struct_type())) {
+                    bail!("StructValue layout does not match the declared struct type");
+                }
                 let ptr = self.as_mut_ptr();
                 func.arg_vals.push(ArgVal::Pointer(ptr));
                 func.arg_vals.push(ArgVal::Pointer(ptr));

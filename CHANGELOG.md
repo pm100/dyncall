@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pushing an `ArgVal` is now checked against the declared argument type instead
   of passing mismatched bytes to libffi. With `coerce`, numeric variants are
   converted; pointer parameters also accept a pointer-sized integer. (#4)
+- `StructValue` arguments are now validated against the declared struct: a
+  different layout is rejected (previously libffi could read, or the callee write,
+  past the buffer), and by-value structs must have every field pushed. Pointer-to-
+  struct arguments may still be left partly unpopulated (zero-filled). Added
+  `StructType::same_layout`. (#5)
 
 ### Tests
 - Added regression tests for the code-review findings (#1, #2, #4–#8, #11–#13,

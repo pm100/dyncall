@@ -95,6 +95,19 @@ impl StructType {
         self.fields.len()
     }
 
+    /// Returns `true` if `other` has an identical memory layout: the same
+    /// total size and alignment, and the same field types at the same offsets.
+    pub fn same_layout(&self, other: &StructType) -> bool {
+        self.size == other.size
+            && self.alignment == other.alignment
+            && self.fields.len() == other.fields.len()
+            && self.fields.iter().zip(&other.fields).all(|(a, b)| {
+                a.offset == b.offset
+                    && a.size == b.size
+                    && std::mem::discriminant(&a.arg_type) == std::mem::discriminant(&b.arg_type)
+            })
+    }
+
     pub fn field_type(&self, index: usize) -> Option<&ArgType> {
         self.fields.get(index).map(|field| &field.arg_type)
     }
