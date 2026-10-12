@@ -1106,7 +1106,7 @@ mod test {
     fn test_push_script_val_output_ptr() {
         use crate::ScriptVal;
         let def = DynCaller::define_function(
-            &format!("{LIBC}|sscanf|cstr,cstr,*i32|i32|")
+            &format!("{LIBC}|sscanf|cstr,cstr,*i32|i32|fixargs=2")
         ).unwrap();
         let mut inv = def.prep();
         inv.push_script_val(ScriptVal::Str("99".to_string())).unwrap();
