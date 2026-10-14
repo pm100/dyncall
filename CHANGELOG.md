@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Breaking for exhaustive `match`es on `ScriptVal`:** new variant `ScriptVal::Null`.
+  `Nil` used to mean three things (void return, NULL pointer, NULL `cstr`). Now `Nil` is
+  only "no value" (a `void` return, or zero/absent on input) and `Null` is a NULL pointer:
+  NULL `ptr` / `cstr` / `*{...}` returns, NULL output slots and NULL pointer / `cstr` struct
+  fields are `Null`, so adapters no longer need the declared return type to tell them
+  apart. On input, `Null` passes a real NULL for `ptr` arguments, `cstr` arguments (new:
+  `Nil` still passes an empty string) and pointer struct fields; it is an error for
+  numeric arguments. (#23)
 - `StructValue::script_read` now returns `ScriptVal::Integer` for integer struct fields
   (previously `ScriptVal::Number(f64)`, which lost precision above 2^53 and made
   integer-typed runtimes re-derive integerness from the field type). Floating point

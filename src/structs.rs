@@ -538,6 +538,7 @@ impl StructValue {
                 ScriptVal::Str(_) => sv.push_field_coerced(&0.0f64)?,
                 ScriptVal::Pointer(p) => sv.push_field(p)?,
                 ScriptVal::Nil => sv.push_field_coerced(&0i64)?,
+                ScriptVal::Null => sv.push_field(&std::ptr::null_mut::<c_void>())?,
             }
         }
         Ok(sv)
@@ -546,7 +547,8 @@ impl StructValue {
     /// Read field `index` as a [`ScriptVal`].
     ///
     /// For `cstr` fields the stored pointer is followed to produce an owned
-    /// `String`. Pointer fields return `ScriptVal::Pointer` (or `Nil` if null).
+    /// `String`. Pointer fields return `ScriptVal::Pointer`; a NULL `cstr` or pointer field
+    /// returns `ScriptVal::Null`.
     /// Integer field types (`u8`..`u64`, `i8`..`i64`, `bool`) are returned as
     /// `ScriptVal::Integer` without precision loss (`u64` values above `i64::MAX` wrap,
     /// as for return values and output pointers); `f32` / `f64` fields are
@@ -560,7 +562,8 @@ impl StructValue {
                 if let Ok(s) = self.read_field::<String>(index) {
                     return Ok(ScriptVal::Str(s));
                 }
-                Ok(ScriptVal::Nil)
+                // `read_field::<String>` only fails for a NULL pointer.
+                Ok(ScriptVal::Null)
             }
             ArgType::OpaquePointer => {
                 let p = self.read_field::<*mut c_void>(index)?;
@@ -597,7 +600,12 @@ pub enum ScriptVal {
     Str(String),
     /// Opaque pointer (`void *`, `FILE *`, `HANDLE`, …).
     Pointer(*mut c_void),
-    /// Null pointer, void return, or zero / absent value.
+    /// A NULL pointer: a NULL `ptr` or `cstr` return value, output slot or struct field.
+    /// On input it passes a real NULL for `ptr` and `cstr` arguments and fields.
+    Null,
+    /// No value: a `void` return, or an absent / zero value. On input it means NULL for
+    /// `ptr`, an empty string for `cstr` and zero for numbers (use [`ScriptVal::Null`] to
+    /// pass a real NULL `cstr`).
     Nil,
 }
 
@@ -619,6 +627,6 @@ impl From<&str> for ScriptVal {
 
 impl From<*mut c_void> for ScriptVal {
     fn from(v: *mut c_void) -> Self {
-        if v.is_null() { ScriptVal::Nil } else { ScriptVal::Pointer(v) }
+        if v.is_null() { ScriptVal::Null } else { ScriptVal::Pointer(v) }
     }
 }

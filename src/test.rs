@@ -1273,14 +1273,14 @@ mod test {
         assert!(err.to_string().contains("dyncall_no_such_lib_xyz"), "error was: {err}");
     }
 
-    /// #12: a NULL `const char *` return must not look like an empty string.
+    /// #12/#23: a NULL `const char *` return is `Null`: not an empty string, not `Nil`.
     #[test]
-    fn test_null_cstr_return_is_nil() {
+    fn test_null_cstr_return_is_null() {
         use crate::ScriptVal;
         let def = DynCaller::define_function(&format!("{LIBC}|getenv|cstr|cstr|")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&"DYNCALL_SURELY_UNSET_VAR_12345".to_string()).unwrap();
-        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Nil);
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Null);
     }
 
     /// #13: i8 return values keep their sign.
@@ -1591,5 +1591,68 @@ mod test {
                 ScriptVal::Integer(200),
             ]
         );
+    }
+
+    /// #23: `Nil` is "no value" (void), `Null` is a NULL pointer; no return type needed to tell.
+    #[test]
+    fn test_null_pointer_return_is_null_not_nil() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|strchr|cstr,i32|ptr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("abc".into())).unwrap();
+        inv.push_script_val(ScriptVal::Integer('z' as i64)).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Null);
+
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("abc".into())).unwrap();
+        inv.push_script_val(ScriptVal::Integer('b' as i64)).unwrap();
+        assert!(matches!(inv.call_scripted().unwrap().return_val, ScriptVal::Pointer(_)));
+    }
+
+    /// #23: `Null` passes a real NULL for a `cstr` argument (`Nil` passes an empty string).
+    #[test]
+    fn test_null_cstr_argument_is_real_null() {
+        use crate::ScriptVal;
+        // setlocale(LC_ALL, NULL) queries the current locale instead of changing it.
+        #[cfg(target_os = "windows")]
+        const LC_ALL: i64 = 0;
+        #[cfg(not(target_os = "windows"))]
+        const LC_ALL: i64 = 6;
+        let def = DynCaller::define_function(&format!("{LIBC}|setlocale|i32,cstr|cstr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Integer(LC_ALL)).unwrap();
+        inv.push_script_val(ScriptVal::Null).unwrap();
+        match inv.call_scripted().unwrap().return_val {
+            ScriptVal::Str(s) => assert!(!s.is_empty()),
+            other => panic!("expected the current locale name, got {other:?}"),
+        }
+    }
+
+    /// #23: `Null` is accepted for `ptr` arguments, rejected for numeric ones.
+    #[test]
+    fn test_null_argument_validation() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_script_val(ScriptVal::Null).is_err());
+        let def = DynCaller::define_function(&format!("{LIBC}|free|ptr|void|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Null).unwrap(); // free(NULL) is a no-op
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Nil);
+    }
+
+    /// #23: NULL pointer / cstr struct fields round-trip as `Null`.
+    #[test]
+    fn test_null_struct_fields() {
+        use crate::{ArgType, ScriptVal, StructType, StructValue};
+        let ty = ArgType::Struct(StructType::new(vec![ArgType::OpaquePointer, ArgType::CString, ArgType::I32]).unwrap());
+        let sv = StructValue::from_script_vals(
+            &ty,
+            &[ScriptVal::Null, ScriptVal::Null, ScriptVal::Integer(7)],
+        )
+        .unwrap();
+        assert_eq!(sv.script_read(0).unwrap(), ScriptVal::Null);
+        assert_eq!(sv.script_read(1).unwrap(), ScriptVal::Null);
+        assert_eq!(sv.script_read(2).unwrap(), ScriptVal::Integer(7));
     }
 }

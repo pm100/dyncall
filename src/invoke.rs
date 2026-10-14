@@ -213,7 +213,8 @@ impl<'a> Invocation<'a> {
     /// - `cstr`: extracted from `Str`.
     /// - `ocstr`: buffer allocated from `Str` content; written back via
     ///   [`ScriptResult::outputs`] after [`call_scripted`](Invocation::call_scripted).
-    /// - `ptr` (opaque pointer): extracted from `Pointer` or `Nil`.
+    /// - `ptr` (opaque pointer): extracted from `Pointer`, an integer, `Null` or `Nil` (both NULL).
+    /// - `cstr`: `Str`; `Null` passes a real NULL pointer, `Nil` an empty string.
     /// - `*T` (output pointer): boxed from the initial value; written back via
     ///   [`ScriptResult::outputs`] after [`call_scripted`](Invocation::call_scripted).
     /// - Struct args (`{…}` / `*{…}`): return an error — use
@@ -287,7 +288,7 @@ impl<'a> Invocation<'a> {
                     ScriptVal::Pointer(p) => *p,
                     ScriptVal::Integer(n) => *n as usize as *mut c_void,
                     ScriptVal::Number(f) => *f as i64 as usize as *mut c_void,
-                    ScriptVal::Nil => ptr::null_mut(),
+                    ScriptVal::Nil | ScriptVal::Null => ptr::null_mut(),
                     other => bail!("push_script_val: cannot push {:?} for ptr arg", other),
                 };
                 self.arg_vals.push(ArgVal::Pointer(p));
@@ -295,6 +296,12 @@ impl<'a> Invocation<'a> {
                 self.arg_vals[val_count + 1].payload_ptr()
             }
             // ── cstr input ────────────────────────────────────────────────
+            ArgType::CString if matches!(val, ScriptVal::Null) => {
+                // A real NULL `const char *` (as opposed to an empty string).
+                self.arg_vals.push(ArgVal::Pointer(ptr::null_mut()));
+                self.arg_vals.push(ArgVal::Pointer(ptr::null_mut()));
+                self.arg_vals[val_count + 1].payload_ptr()
+            }
             ArgType::CString => {
                 let s = match val {
                     ScriptVal::Str(s) => s,
@@ -630,17 +637,19 @@ pub struct ScriptResult {
     ///
     /// - Numeric return types → [`ScriptVal::Integer`] (for all integer types)
     ///   or [`ScriptVal::Number`] (for `f32`/`f64`).
-    /// - `cstr` → [`ScriptVal::Str`].
-    /// - `ptr` → [`ScriptVal::Pointer`] or [`ScriptVal::Nil`] (if null).
+    /// - `cstr` → [`ScriptVal::Str`], or [`ScriptVal::Null`] for a NULL pointer.
+    /// - `ptr` → [`ScriptVal::Pointer`], or [`ScriptVal::Null`] for a NULL pointer.
     /// - `void` → [`ScriptVal::Nil`].
-    /// - `*{...}` → [`ScriptVal::Nil`]; the struct is in
-    ///   [`return_struct`](ScriptResult::return_struct).
+    /// - `*{...}` → [`ScriptVal::Nil`], with the struct in
+    ///   [`return_struct`](ScriptResult::return_struct); [`ScriptVal::Null`] if the pointer was NULL.
+    ///
+    /// So `Nil` always means "no value" and `Null` always means "NULL pointer"; an adapter
+    /// does not need the declared return type to tell them apart.
     /// - Struct-by-value return types → not supported by descriptors.
     pub return_val: ScriptVal,
     /// For a `*{...}` return type: a snapshot copy of the struct the callee
     /// returned a pointer to, or `None` if the pointer was NULL (or the return
-    /// type is not a struct pointer). `return_val` is [`ScriptVal::Nil`] in
-    /// this case.
+    /// type is not a struct pointer).
     pub return_struct: Option<StructValue>,
     /// Written-back values for each output-pointer argument.
     ///
@@ -686,14 +695,16 @@ impl<'a> Invocation<'a> {
             ArgType::CString => {
                 match ret_arg_val {
                     ArgVal::Str(s) => ScriptVal::Str(s),
-                    _ => ScriptVal::Nil, // NULL
+                    _ => ScriptVal::Null, // NULL
                 }
             }
             ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
                 if let ArgVal::StructValue(sv) = ret_arg_val {
                     return_struct = Some(sv);
+                    ScriptVal::Nil
+                } else {
+                    ScriptVal::Null
                 }
-                ScriptVal::Nil
             }
             ArgType::OpaquePointer | ArgType::Pointer(_) => {
                 if let ArgVal::Pointer(p) = ret_arg_val {
