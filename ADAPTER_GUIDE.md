@@ -131,7 +131,7 @@ The parser recognises `DEF XFN`, the evaluator calls `DynCaller::define_function
 | `ArgType` | `dyncall` | Enum of the declared type of each argument |
 | `ArgVal` | `dyncall` | Enum of runtime argument/return values |
 | `StructValue` | `dyncall` | A flat C struct with field-by-field accessors |
-| `ScriptVal` | `dyncall` | The adapter bridge type — `Number(f64)`, `Integer(i64)`, `Str(String)`, `Pointer(*mut c_void)`, or `Nil` |
+| `ScriptVal` | `dyncall` | The adapter bridge type — `Number(f64)`, `Integer(i64)`, `Str(String)`, `Pointer(*mut c_void)`, `Null` (NULL pointer) or `Nil` (no value) |
 | `ScriptResult` | `dyncall` | Return value of `call_scripted()`: `return_val: ScriptVal` plus `outputs: Vec<(usize, ScriptVal)>` |
 
 Imports you'll almost always need:
@@ -156,7 +156,8 @@ per-type match needed:
 ScriptVal::Number(n)   push all numeric arguments (dyncall handles the cast)
 ScriptVal::Str(s)      push string (cstr/ocstr) arguments
 ScriptVal::Pointer(p)  push opaque pointer arguments
-ScriptVal::Nil         push null or output-only pointer arguments
+ScriptVal::Nil         push "no value": output-only pointer arguments, zero, empty cstr
+ScriptVal::Null        push a real NULL for ptr and cstr arguments
 ```
 
 `push_script_val` inspects the declared `ArgType` and performs the correct
@@ -184,7 +185,7 @@ If your language has a tagged-union `Value` type:
 ```
 Value::Number(f64)        -> push_script_val(ScriptVal::Number(n))
 Value::String(s)          -> push_script_val(ScriptVal::Str(s)) for cstr/ocstr args
-Value::Nil / null pointer -> push_script_val(ScriptVal::Nil) or ScriptVal::Pointer(ptr)
+Value::Nil / null pointer -> push_script_val(ScriptVal::Null) or ScriptVal::Pointer(ptr)
 ```
 ---
 
@@ -246,7 +247,7 @@ inv.push_script_val(ScriptVal::Str(string_value))?;
 
 // Opaque pointer (null or existing pointer)
 inv.push_script_val(ScriptVal::Pointer(ptr))?;
-inv.push_script_val(ScriptVal::Nil)?;   // null pointer
+inv.push_script_val(ScriptVal::Null)?;   // null pointer
 ```
 
 `push_script_val` inspects the declared `ArgType` from the descriptor and
@@ -350,6 +351,33 @@ Structs in dyncall descriptors look like `{i32,f64,cstr}` (by value) or
 `*{i32,f64}` (pointer — written back after the call). The most adapter-friendly
 path uses `ScriptVal`:
 
+**Simplest path: `push_script_struct`**
+
+Hand the invocation the field values in declaration order; it builds and owns
+the struct (no slot storage that outlives the call, no `push_mut_arg` borrows).
+After `call_scripted`, the final field values of every `*{...}` argument are in
+`ScriptResult::struct_outputs` as `(arg_index, fields)`:
+
+```rust
+for (i, arg) in script_args.iter().enumerate() {
+    match fdef.get_arg_type(i) {
+        t if t.struct_type().is_some() => {
+            let fields: Vec<ScriptVal> = my_array_to_script_vals(arg);
+            inv.push_script_struct(&fields)?;
+        }
+        _ => inv.push_script_val(to_script_val(arg))?,
+    }
+}
+let result = inv.call_scripted()?;
+for (arg_index, fields) in result.struct_outputs {
+    write_back_into_script_array(&script_args[arg_index], &fields);
+}
+```
+
+Struct layouts that appear in many descriptors can be named once with
+`DynCaller::define_type("SDL_Rect", "{i32,i32,i32,i32}")` and then written as
+`SDL_Rect` / `*SDL_Rect`.
+
 **Inspecting struct field layout:**
 
 Use `ArgType::struct_type()` to query how many fields a struct has and what
@@ -416,6 +444,7 @@ if let ArgVal::StructValue(sv) = &result {
             ScriptVal::Str(s)     => store_string(fi, s),
             ScriptVal::Pointer(p) => store_pointer(fi, p),
             ScriptVal::Nil        => store_number(fi, 0.0),
+            ScriptVal::Null       => store_number(fi, 0.0),
         }
     }
 }
@@ -428,9 +457,9 @@ if let Some(sv) = get_struct_slot(i) {
 }
 ```
 
-`script_read` returns `ScriptVal::Number(f64)` or `ScriptVal::Integer(i64)` for
-numeric fields, `ScriptVal::Str(String)` for `cstr` fields, `ScriptVal::Pointer`
-for pointer fields, and `ScriptVal::Nil` for null/void fields.
+`script_read` returns `ScriptVal::Integer(i64)` for integer fields,
+`ScriptVal::Number(f64)` for `f32`/`f64` fields, `ScriptVal::Str(String)` for `cstr` fields, `ScriptVal::Pointer`
+for pointer fields, `ScriptVal::Null` for a NULL `cstr` or pointer field.
 
 ### Making the call and reading the result
 
@@ -438,7 +467,7 @@ for pointer fields, and `ScriptVal::Nil` for null/void fields.
 
 ```rust
 let result: ScriptResult = inv.call_scripted()?;
-// result.return_val is a ScriptVal (Number, Integer, Str, Pointer, or Nil)
+// result.return_val is a ScriptVal (Number, Integer, Str, Pointer, Null, or Nil)
 // result.outputs contains (arg_index, ScriptVal) for each output-pointer arg
 match result.return_val {
     ScriptVal::Number(n)   => push_float(n),
@@ -446,6 +475,7 @@ match result.return_val {
     ScriptVal::Str(s)      => push_string(s),
     ScriptVal::Pointer(p)  => push_pointer(p),
     ScriptVal::Nil         => push_nil(),
+    ScriptVal::Null        => push_null_pointer(),
 }
 for (arg_index, val) in result.outputs {
     write_back_to_script_variable(arg_index, val);
@@ -724,6 +754,7 @@ pub fn dispatch(func_def: &FuncDef, forth: &mut Forth) -> Result<(), Error> {
                 ScriptVal::Integer(n) => forth.stack_push(n),
                 ScriptVal::Pointer(p) => forth.stack_push(p as usize as i64),
                 ScriptVal::Nil        => forth.stack_push(0),
+                ScriptVal::Null       => forth.stack_push(0),
                 ScriptVal::Str(s) => {
                     let idx = forth.strings.len();
                     forth.strings.push(CString::new(s)?);
@@ -804,6 +835,7 @@ for field in &fields {
         ScriptVal::Integer(n) => sv.push_field_coerced(n)?,
         ScriptVal::Pointer(p) => sv.push_field_coerced(&(*p as i64))?,
         ScriptVal::Nil        => sv.push_field_coerced(&0i64)?,
+        ScriptVal::Null       => sv.push_field(&std::ptr::null_mut::<std::ffi::c_void>())?,
         ScriptVal::Str(_)     => sv.push_field_coerced(&0.0f64)?,  // cstr: write null
     }
 }
@@ -843,7 +875,7 @@ Use this list when writing a new adapter.
 - [ ] Non-struct: use `call_scripted()` and match on `result.return_val` (`ScriptVal` variants)
 - [ ] Output args: iterate `result.outputs` to get written-back values
 - [ ] Struct return: use `call()` directly; check `ArgVal::StructValue(sv)`, iterate with `sv.script_read(fi)`
-- [ ] Void: `result.return_val` will be `ScriptVal::Nil`
+- [ ] Void: `result.return_val` will be `ScriptVal::Nil`; a NULL pointer / NULL `cstr` return is `ScriptVal::Null`
 
 ### Robustness
 

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking for exhaustive `match`es on `ScriptVal`:** new variant `ScriptVal::Null`.
+  `Nil` used to mean three things (void return, NULL pointer, NULL `cstr`). Now `Nil` is
+  only "no value" (a `void` return, or zero/absent on input) and `Null` is a NULL pointer:
+  NULL `ptr` / `cstr` / `*{...}` returns, NULL output slots and NULL pointer / `cstr` struct
+  fields are `Null`, so adapters no longer need the declared return type to tell them
+  apart. On input, `Null` passes a real NULL for `ptr` arguments, `cstr` arguments (new:
+  `Nil` still passes an empty string) and pointer struct fields; it is an error for
+  numeric arguments. (#23)
+- `StructValue::script_read` now returns `ScriptVal::Integer` for integer struct fields
+  (previously `ScriptVal::Number(f64)`, which lost precision above 2^53 and made
+  integer-typed runtimes re-derive integerness from the field type). Floating point
+  fields still read as `Number`. Adapters that match both variants are unaffected;
+  adapters that only handled `Number` for struct fields must handle `Integer`. (#21)
+
+### Added
+- `Invocation::push_script_struct` and `ScriptResult::struct_outputs`: struct (`{...}`)
+  and pointer-to-struct (`*{...}`) arguments can now be pushed from a list of
+  `ScriptVal`s. The invocation owns the struct, so scripting adapters no longer need
+  their own slot storage or `push_mut_arg` borrow juggling, and the final field values
+  of `*{...}` arguments come back in `struct_outputs`. (#20)
+- `DynCaller::define_type(name, definition)`: named type aliases usable in descriptors
+  (`ptr,*SDL_Rect`), including nested in other types. (#24)
+
 ### Fixed
 - `FuncDef` no longer leaves dangling pointers in its `ffi_cif` after being
   cloned or moved (use-after-free). The cif, argument-type array and struct

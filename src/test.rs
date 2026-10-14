@@ -1273,14 +1273,14 @@ mod test {
         assert!(err.to_string().contains("dyncall_no_such_lib_xyz"), "error was: {err}");
     }
 
-    /// #12: a NULL `const char *` return must not look like an empty string.
+    /// #12/#23: a NULL `const char *` return is `Null`: not an empty string, not `Nil`.
     #[test]
-    fn test_null_cstr_return_is_nil() {
+    fn test_null_cstr_return_is_null() {
         use crate::ScriptVal;
         let def = DynCaller::define_function(&format!("{LIBC}|getenv|cstr|cstr|")).unwrap();
         let mut inv = def.prep();
         inv.push_arg(&"DYNCALL_SURELY_UNSET_VAR_12345".to_string()).unwrap();
-        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Nil);
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Null);
     }
 
     /// #13: i8 return values keep their sign.
@@ -1427,5 +1427,232 @@ mod test {
         let mut inv = def.prep();
         inv.push_arg(&-3i8).unwrap();
         assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Integer(3));
+    }
+
+    /// #20: a by-value struct argument can be pushed straight from script values.
+    #[test]
+    fn test_push_script_struct_by_value() {
+        use crate::ScriptVal;
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_struct(&[ScriptVal::Integer(10), ScriptVal::Number(32.0)]).unwrap();
+        let r = inv.call_scripted().unwrap();
+        assert_eq!(r.return_val, ScriptVal::Integer(42));
+        assert!(r.struct_outputs.is_empty());
+    }
+
+    /// #20: `*{...}` arguments are owned by the invocation and come back in `struct_outputs`.
+    #[test]
+    fn test_push_script_struct_pointer_writeback() {
+        use crate::ScriptVal;
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|bump_pair|*{{u32,u32}}|u32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_struct(&[ScriptVal::Integer(7), ScriptVal::Integer(8)]).unwrap();
+        let r = inv.call_scripted().unwrap();
+        assert_eq!(r.return_val, ScriptVal::Integer(18));
+        assert_eq!(r.struct_outputs, vec![(0, vec![ScriptVal::Integer(8), ScriptVal::Integer(10)])]);
+    }
+
+    /// #20: omitted trailing fields of a `*{...}` argument are zero-filled.
+    #[test]
+    fn test_push_script_struct_pointer_partial_is_zero_filled() {
+        use crate::ScriptVal;
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|bump_pair|*{{u32,u32}}|u32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_struct(&[ScriptVal::Integer(5)]).unwrap();
+        let r = inv.call_scripted().unwrap();
+        assert_eq!(r.struct_outputs[0].1, vec![ScriptVal::Integer(6), ScriptVal::Integer(2)]);
+    }
+
+    /// #20: misuse is an error, not UB.
+    #[test]
+    fn test_push_script_struct_rejects_bad_input() {
+        use crate::ScriptVal;
+        let lib = struct_fixture_path();
+        // by-value struct must be complete
+        let def = DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_script_struct(&[ScriptVal::Integer(1)]).is_err());
+        // too many fields
+        let mut inv = def.prep();
+        let three = [ScriptVal::Integer(1), ScriptVal::Integer(2), ScriptVal::Integer(3)];
+        assert!(inv.push_script_struct(&three).is_err());
+        // not a struct argument
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_script_struct(&[ScriptVal::Integer(1)]).is_err());
+        // push_script_val points at the new API
+        let lib_def = DynCaller::define_function(&format!("{lib}|sum_pair|{{u32,u32}}|u32|")).unwrap();
+        let mut inv = lib_def.prep();
+        let msg = inv.push_script_val(ScriptVal::Integer(1)).unwrap_err().to_string();
+        assert!(msg.contains("push_script_struct"), "{msg}");
+    }
+
+    /// #24: a named struct works wherever the struct token would, by value and by pointer.
+    #[test]
+    fn test_define_type_struct_alias() {
+        use crate::ScriptVal;
+        DynCaller::define_type("T24Pair", "{u32,u32}").unwrap();
+        let lib = struct_fixture_path();
+        let def = DynCaller::define_function(&format!("{lib}|sum_pair|T24Pair|u32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_struct(&[ScriptVal::Integer(20), ScriptVal::Integer(22)]).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Integer(42));
+
+        let def = DynCaller::define_function(&format!("{lib}|bump_pair|*T24Pair|u32|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_struct(&[ScriptVal::Integer(1), ScriptVal::Integer(2)]).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Integer(6));
+    }
+
+    /// #24: aliases nest, and can name scalars and pointers.
+    #[test]
+    fn test_define_type_nested_and_scalar_aliases() {
+        DynCaller::define_type("T24Rect", "{i32,i32,i32,i32}").unwrap();
+        DynCaller::define_type("T24Id", "u32").unwrap();
+        DynCaller::define_type("T24RectPtr", "*T24Rect").unwrap();
+        DynCaller::define_type("T24Pair2", "{T24Id,T24Id}").unwrap();
+        let def = DynCaller::define_function(&format!(
+            "{LIBC}|memcmp|T24RectPtr,*T24Rect,usize|i32|"
+        ))
+        .unwrap();
+        assert!(def.get_arg_type(0).is_struct_ptr());
+        assert!(def.get_arg_type(1).is_struct_ptr());
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|T24Id|i32|coerce")).unwrap();
+        assert!(matches!(def.get_arg_type(0), crate::ArgType::U32));
+        let def = DynCaller::define_function(&format!("{LIBC}|memcmp|*T24Pair2,ptr,usize|i32|")).unwrap();
+        assert_eq!(def.get_arg_type(0).struct_type().unwrap().field_count(), 2);
+    }
+
+    /// #24: bad alias names/definitions and unknown names are rejected.
+    #[test]
+    fn test_define_type_errors() {
+        for bad in ["", "1abc", "has space", "a-b", "i32", "ptr", "cstr", "void", "usize"] {
+            assert!(DynCaller::define_type(bad, "u32").is_err(), "name {bad:?} accepted");
+        }
+        assert!(DynCaller::define_type("T24Bad", "nonsense").is_err());
+        assert!(DynCaller::define_type("T24Void", "void").is_err());
+        let r = DynCaller::define_function(&format!("{LIBC}|abs|T24NeverDefined|i32|"));
+        assert!(r.is_err());
+        // an alias is not a qualifier-taking type
+        DynCaller::define_type("T24Plain", "u32").unwrap();
+        assert!(DynCaller::define_function(&format!("{LIBC}|abs|T24Plain=3|i32|")).is_err());
+    }
+
+    /// #24: redefining an alias affects new functions only.
+    #[test]
+    fn test_define_type_redefinition() {
+        DynCaller::define_type("T24Re", "i32").unwrap();
+        let old = DynCaller::define_function(&format!("{LIBC}|abs|T24Re|i32|")).unwrap();
+        DynCaller::define_type("T24Re", "i64").unwrap();
+        let new = DynCaller::define_function(&format!("{LIBC}|abs|T24Re|i32|")).unwrap();
+        assert!(matches!(old.get_arg_type(0), crate::ArgType::I32));
+        assert!(matches!(new.get_arg_type(0), crate::ArgType::I64));
+    }
+
+    /// #21: integer struct fields read as `Integer` (exactly, with their sign); floats as `Number`.
+    #[test]
+    fn test_script_read_integer_fields_are_integers() {
+        use crate::{ArgType, ScriptVal, StructType, StructValue};
+        let st = StructType::new(vec![
+            ArgType::I8,
+            ArgType::U16,
+            ArgType::I32,
+            ArgType::I64,
+            ArgType::U64,
+            ArgType::F32,
+            ArgType::F64,
+            ArgType::Char,
+        ])
+        .unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field(&-5i8).unwrap();
+        sv.push_field(&65535u16).unwrap();
+        sv.push_field(&-123456i32).unwrap();
+        sv.push_field(&((1i64 << 53) + 1)).unwrap(); // not representable as f64
+        sv.push_field(&u64::MAX).unwrap();
+        sv.push_field(&1.5f32).unwrap();
+        sv.push_field(&2.25f64).unwrap();
+        sv.push_field(&200u8).unwrap();
+        let read: Vec<ScriptVal> = (0..8).map(|i| sv.script_read(i).unwrap()).collect();
+        assert_eq!(
+            read,
+            vec![
+                ScriptVal::Integer(-5),
+                ScriptVal::Integer(65535),
+                ScriptVal::Integer(-123456),
+                ScriptVal::Integer((1i64 << 53) + 1),
+                ScriptVal::Integer(-1), // u64::MAX wraps, like return values and output pointers
+                ScriptVal::Number(1.5),
+                ScriptVal::Number(2.25),
+                ScriptVal::Integer(200),
+            ]
+        );
+    }
+
+    /// #23: `Nil` is "no value" (void), `Null` is a NULL pointer; no return type needed to tell.
+    #[test]
+    fn test_null_pointer_return_is_null_not_nil() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|strchr|cstr,i32|ptr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("abc".into())).unwrap();
+        inv.push_script_val(ScriptVal::Integer('z' as i64)).unwrap();
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Null);
+
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Str("abc".into())).unwrap();
+        inv.push_script_val(ScriptVal::Integer('b' as i64)).unwrap();
+        assert!(matches!(inv.call_scripted().unwrap().return_val, ScriptVal::Pointer(_)));
+    }
+
+    /// #23: `Null` passes a real NULL for a `cstr` argument (`Nil` passes an empty string).
+    #[test]
+    fn test_null_cstr_argument_is_real_null() {
+        use crate::ScriptVal;
+        // setlocale(LC_ALL, NULL) queries the current locale instead of changing it.
+        #[cfg(target_os = "windows")]
+        const LC_ALL: i64 = 0;
+        #[cfg(not(target_os = "windows"))]
+        const LC_ALL: i64 = 6;
+        let def = DynCaller::define_function(&format!("{LIBC}|setlocale|i32,cstr|cstr|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Integer(LC_ALL)).unwrap();
+        inv.push_script_val(ScriptVal::Null).unwrap();
+        match inv.call_scripted().unwrap().return_val {
+            ScriptVal::Str(s) => assert!(!s.is_empty()),
+            other => panic!("expected the current locale name, got {other:?}"),
+        }
+    }
+
+    /// #23: `Null` is accepted for `ptr` arguments, rejected for numeric ones.
+    #[test]
+    fn test_null_argument_validation() {
+        use crate::ScriptVal;
+        let def = DynCaller::define_function(&format!("{LIBC}|abs|i32|i32|")).unwrap();
+        let mut inv = def.prep();
+        assert!(inv.push_script_val(ScriptVal::Null).is_err());
+        let def = DynCaller::define_function(&format!("{LIBC}|free|ptr|void|")).unwrap();
+        let mut inv = def.prep();
+        inv.push_script_val(ScriptVal::Null).unwrap(); // free(NULL) is a no-op
+        assert_eq!(inv.call_scripted().unwrap().return_val, ScriptVal::Nil);
+    }
+
+    /// #23: NULL pointer / cstr struct fields round-trip as `Null`.
+    #[test]
+    fn test_null_struct_fields() {
+        use crate::{ArgType, ScriptVal, StructType, StructValue};
+        let ty = ArgType::Struct(StructType::new(vec![ArgType::OpaquePointer, ArgType::CString, ArgType::I32]).unwrap());
+        let sv = StructValue::from_script_vals(
+            &ty,
+            &[ScriptVal::Null, ScriptVal::Null, ScriptVal::Integer(7)],
+        )
+        .unwrap();
+        assert_eq!(sv.script_read(0).unwrap(), ScriptVal::Null);
+        assert_eq!(sv.script_read(1).unwrap(), ScriptVal::Null);
+        assert_eq!(sv.script_read(2).unwrap(), ScriptVal::Integer(7));
     }
 }

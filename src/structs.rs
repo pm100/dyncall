@@ -538,6 +538,7 @@ impl StructValue {
                 ScriptVal::Str(_) => sv.push_field_coerced(&0.0f64)?,
                 ScriptVal::Pointer(p) => sv.push_field(p)?,
                 ScriptVal::Nil => sv.push_field_coerced(&0i64)?,
+                ScriptVal::Null => sv.push_field(&std::ptr::null_mut::<c_void>())?,
             }
         }
         Ok(sv)
@@ -546,8 +547,12 @@ impl StructValue {
     /// Read field `index` as a [`ScriptVal`].
     ///
     /// For `cstr` fields the stored pointer is followed to produce an owned
-    /// `String`. Pointer fields return `ScriptVal::Pointer` (or `Nil` if null).
-    /// All other numeric field types are widened to `f64` as `ScriptVal::Number`.
+    /// `String`. Pointer fields return `ScriptVal::Pointer`; a NULL `cstr` or pointer field
+    /// returns `ScriptVal::Null`.
+    /// Integer field types (`u8`..`u64`, `i8`..`i64`, `bool`) are returned as
+    /// `ScriptVal::Integer` without precision loss (`u64` values above `i64::MAX` wrap,
+    /// as for return values and output pointers); `f32` / `f64` fields are
+    /// returned as `ScriptVal::Number`.
     pub fn script_read(&self, index: usize) -> Result<ScriptVal> {
         let field_type = self.layout.fields.get(index)
             .map(|f| &f.arg_type)
@@ -557,12 +562,15 @@ impl StructValue {
                 if let Ok(s) = self.read_field::<String>(index) {
                     return Ok(ScriptVal::Str(s));
                 }
-                Ok(ScriptVal::Nil)
+                // `read_field::<String>` only fails for a NULL pointer.
+                Ok(ScriptVal::Null)
             }
             ArgType::OpaquePointer => {
                 let p = self.read_field::<*mut c_void>(index)?;
                 Ok(ScriptVal::from(p))
             }
+            ArgType::Char | ArgType::I8 | ArgType::I16 | ArgType::U16 | ArgType::I32 | ArgType::U32
+            | ArgType::I64 | ArgType::U64 => Ok(ScriptVal::Integer(self.read_field_coerced::<i64>(index)?)),
             _ => {
                 let n = self.read_field_coerced::<f64>(index)?;
                 Ok(ScriptVal::Number(n))
@@ -579,17 +587,25 @@ impl StructValue {
 /// returned by [`StructValue::script_read`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptVal {
-    /// Numeric value — floats and small integers (BASIC, Lox, JS-style runtimes).
-    /// All integer and float C types are widened to `f64` on read.
+    /// Floating point value, and the numeric type of runtimes that store every number as
+    /// an `f64` (BASIC, Lox, JS-style). Floating point C types (`f32` / `f64`) are always
+    /// read as `Number`; integer C types are read as [`ScriptVal::Integer`].
+    /// On input, both variants are coerced to the declared type.
     Number(f64),
     /// Integer value without float precision loss (Forth, PostScript-style runtimes).
-    /// Preferred over `Number` when the runtime uses `i64` as its stack type.
+    /// Integer C types are read as this (return values, output pointers and struct fields);
+    /// runtimes with a single `f64` number type should convert with `n as f64`.
     Integer(i64),
     /// String value (`cstr` pointer followed to produce an owned `String`).
     Str(String),
     /// Opaque pointer (`void *`, `FILE *`, `HANDLE`, …).
     Pointer(*mut c_void),
-    /// Null pointer, void return, or zero / absent value.
+    /// A NULL pointer: a NULL `ptr` or `cstr` return value, output slot or struct field.
+    /// On input it passes a real NULL for `ptr` and `cstr` arguments and fields.
+    Null,
+    /// No value: a `void` return, or an absent / zero value. On input it means NULL for
+    /// `ptr`, an empty string for `cstr` and zero for numbers (use [`ScriptVal::Null`] to
+    /// pass a real NULL `cstr`).
     Nil,
 }
 
@@ -611,6 +627,6 @@ impl From<&str> for ScriptVal {
 
 impl From<*mut c_void> for ScriptVal {
     fn from(v: *mut c_void) -> Self {
-        if v.is_null() { ScriptVal::Nil } else { ScriptVal::Pointer(v) }
+        if v.is_null() { ScriptVal::Null } else { ScriptVal::Pointer(v) }
     }
 }

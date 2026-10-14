@@ -111,6 +111,9 @@ pub struct Invocation<'a> {
     pub(crate) last_errno: Option<i32>,
     /// Output slots allocated by push_script_val; (arg_index, slot).
     pub(crate) script_output_slots: Vec<(usize, ScriptOutputSlot)>,
+    /// Pointer-to-struct arguments owned by the invocation (see `push_script_struct`);
+    /// (arg_index, struct). Boxed so the bytes keep a stable address while the callee runs.
+    pub(crate) script_struct_slots: Vec<(usize, Box<StructValue>)>,
 }
 impl<'a> Invocation<'a> {
     /// Push an input argument.
@@ -210,7 +213,8 @@ impl<'a> Invocation<'a> {
     /// - `cstr`: extracted from `Str`.
     /// - `ocstr`: buffer allocated from `Str` content; written back via
     ///   [`ScriptResult::outputs`] after [`call_scripted`](Invocation::call_scripted).
-    /// - `ptr` (opaque pointer): extracted from `Pointer` or `Nil`.
+    /// - `ptr` (opaque pointer): extracted from `Pointer`, an integer, `Null` or `Nil` (both NULL).
+    /// - `cstr`: `Str`; `Null` passes a real NULL pointer, `Nil` an empty string.
     /// - `*T` (output pointer): boxed from the initial value; written back via
     ///   [`ScriptResult::outputs`] after [`call_scripted`](Invocation::call_scripted).
     /// - Struct args (`{…}` / `*{…}`): return an error — use
@@ -284,7 +288,7 @@ impl<'a> Invocation<'a> {
                     ScriptVal::Pointer(p) => *p,
                     ScriptVal::Integer(n) => *n as usize as *mut c_void,
                     ScriptVal::Number(f) => *f as i64 as usize as *mut c_void,
-                    ScriptVal::Nil => ptr::null_mut(),
+                    ScriptVal::Nil | ScriptVal::Null => ptr::null_mut(),
                     other => bail!("push_script_val: cannot push {:?} for ptr arg", other),
                 };
                 self.arg_vals.push(ArgVal::Pointer(p));
@@ -292,6 +296,12 @@ impl<'a> Invocation<'a> {
                 self.arg_vals[val_count + 1].payload_ptr()
             }
             // ── cstr input ────────────────────────────────────────────────
+            ArgType::CString if matches!(val, ScriptVal::Null) => {
+                // A real NULL `const char *` (as opposed to an empty string).
+                self.arg_vals.push(ArgVal::Pointer(ptr::null_mut()));
+                self.arg_vals.push(ArgVal::Pointer(ptr::null_mut()));
+                self.arg_vals[val_count + 1].payload_ptr()
+            }
             ArgType::CString => {
                 let s = match val {
                     ScriptVal::Str(s) => s,
@@ -303,7 +313,7 @@ impl<'a> Invocation<'a> {
             }
             // ── struct — not supported via ScriptVal ──────────────────────
             ArgType::Struct(_) | ArgType::Pointer(_) => {
-                bail!("push_script_val: struct arguments must use push_arg with a StructValue");
+                bail!("push_script_val: struct arguments must use push_script_struct (or push_arg with a StructValue)");
             }
             // ── scalar numeric ────────────────────────────────────────────
             _ => match &val {
@@ -313,6 +323,42 @@ impl<'a> Invocation<'a> {
                 other => bail!("push_script_val: cannot push {:?} for scalar arg {:?}", other, declared),
             },
         };
+        self.finish_push(argp, val_count)
+    }
+
+    /// Push the next argument, a struct (`{...}`) or pointer to a struct (`*{...}`), from a
+    /// list of field values.
+    ///
+    /// The scripted counterpart of [`push_script_val`](Invocation::push_script_val) for
+    /// struct arguments: the invocation builds and owns the [`StructValue`], so adapters need
+    /// no separate storage that outlives the call and no borrow juggling. Fields are given
+    /// in declaration order and coerced to the declared field types
+    /// ([`StructValue::from_script_vals`]); fields left out stay zero for `*{...}`
+    /// arguments, while a by-value struct must be given in full.
+    ///
+    /// For `*{...}` arguments the callee may modify the struct. After
+    /// [`call_scripted`](Invocation::call_scripted) the final field values are in
+    /// [`ScriptResult::struct_outputs`] under this argument's index.
+    pub fn push_script_struct(&mut self, fields: &[ScriptVal]) -> Result<()> {
+        self.check_arg_count()?;
+        let arg_index = self.arg_ptrs.len();
+        let declared = self.func_def.inner.arg_types[arg_index].clone();
+        let is_ptr = match &declared {
+            ArgType::Struct(_) => false,
+            ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => true,
+            other => bail!("push_script_struct: argument {} is declared as {:?}, not a struct", arg_index, other),
+        };
+        let sv = StructValue::from_script_vals(&declared, fields)?;
+        if !is_ptr {
+            return self.push_arg(&sv);
+        }
+        let mut slot = Box::new(sv);
+        let ptr = slot.as_mut_ptr();
+        let val_count = self.arg_vals.len();
+        self.arg_vals.push(ArgVal::Pointer(ptr));
+        self.arg_vals.push(ArgVal::Pointer(ptr));
+        let argp = self.arg_vals[val_count + 1].payload_ptr();
+        self.script_struct_slots.push((arg_index, slot));
         self.finish_push(argp, val_count)
     }
 
@@ -591,17 +637,19 @@ pub struct ScriptResult {
     ///
     /// - Numeric return types → [`ScriptVal::Integer`] (for all integer types)
     ///   or [`ScriptVal::Number`] (for `f32`/`f64`).
-    /// - `cstr` → [`ScriptVal::Str`].
-    /// - `ptr` → [`ScriptVal::Pointer`] or [`ScriptVal::Nil`] (if null).
+    /// - `cstr` → [`ScriptVal::Str`], or [`ScriptVal::Null`] for a NULL pointer.
+    /// - `ptr` → [`ScriptVal::Pointer`], or [`ScriptVal::Null`] for a NULL pointer.
     /// - `void` → [`ScriptVal::Nil`].
-    /// - `*{...}` → [`ScriptVal::Nil`]; the struct is in
-    ///   [`return_struct`](ScriptResult::return_struct).
+    /// - `*{...}` → [`ScriptVal::Nil`], with the struct in
+    ///   [`return_struct`](ScriptResult::return_struct); [`ScriptVal::Null`] if the pointer was NULL.
+    ///
+    /// So `Nil` always means "no value" and `Null` always means "NULL pointer"; an adapter
+    /// does not need the declared return type to tell them apart.
     /// - Struct-by-value return types → not supported by descriptors.
     pub return_val: ScriptVal,
     /// For a `*{...}` return type: a snapshot copy of the struct the callee
     /// returned a pointer to, or `None` if the pointer was NULL (or the return
-    /// type is not a struct pointer). `return_val` is [`ScriptVal::Nil`] in
-    /// this case.
+    /// type is not a struct pointer).
     pub return_struct: Option<StructValue>,
     /// Written-back values for each output-pointer argument.
     ///
@@ -609,6 +657,11 @@ pub struct ScriptResult {
     /// position of the argument in the function's parameter list.  Entries
     /// appear in push order (ascending `arg_index`).
     pub outputs: Vec<(usize, ScriptVal)>,
+    /// Final field values of every `*{...}` argument pushed with
+    /// [`push_script_struct`](Invocation::push_script_struct), as `(arg_index, fields)` in
+    /// push order, read with [`StructValue::script_read`] (integer fields as
+    /// [`ScriptVal::Integer`], floating point fields as [`ScriptVal::Number`]).
+    pub struct_outputs: Vec<(usize, Vec<ScriptVal>)>,
 }
 
 impl<'a> Invocation<'a> {
@@ -642,14 +695,16 @@ impl<'a> Invocation<'a> {
             ArgType::CString => {
                 match ret_arg_val {
                     ArgVal::Str(s) => ScriptVal::Str(s),
-                    _ => ScriptVal::Nil, // NULL
+                    _ => ScriptVal::Null, // NULL
                 }
             }
             ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => {
                 if let ArgVal::StructValue(sv) = ret_arg_val {
                     return_struct = Some(sv);
+                    ScriptVal::Nil
+                } else {
+                    ScriptVal::Null
                 }
-                ScriptVal::Nil
             }
             ArgType::OpaquePointer | ArgType::Pointer(_) => {
                 if let ArgVal::Pointer(p) = ret_arg_val {
@@ -684,6 +739,15 @@ impl<'a> Invocation<'a> {
             .map(|(idx, slot)| (idx, slot.to_script_val()))
             .collect();
 
-        Ok(ScriptResult { return_val, return_struct, outputs })
+        let struct_outputs = self
+            .script_struct_slots
+            .drain(..)
+            .map(|(idx, sv)| {
+                let fields = (0..sv.field_count()).map(|i| sv.script_read(i)).collect::<Result<Vec<_>>>()?;
+                Ok((idx, fields))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ScriptResult { return_val, return_struct, outputs, struct_outputs })
     }
 }
