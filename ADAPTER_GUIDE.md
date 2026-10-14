@@ -455,8 +455,8 @@ if let Some(sv) = get_struct_slot(i) {
 }
 ```
 
-`script_read` returns `ScriptVal::Number(f64)` or `ScriptVal::Integer(i64)` for
-numeric fields, `ScriptVal::Str(String)` for `cstr` fields, `ScriptVal::Pointer`
+`script_read` returns `ScriptVal::Integer(i64)` for integer fields,
+`ScriptVal::Number(f64)` for `f32`/`f64` fields, `ScriptVal::Str(String)` for `cstr` fields, `ScriptVal::Pointer`
 for pointer fields, and `ScriptVal::Nil` for null/void fields.
 
 ### Making the call and reading the result

@@ -490,14 +490,16 @@ let sv = StructValue::from_script_vals(arg_type, &script_vals).unwrap();
 
 #### Reading struct fields after a call
 
-[`StructValue::script_read`] returns a [`ScriptVal`] for each field — numeric fields as `ScriptVal::Number(f64)`, `cstr` fields as `ScriptVal::Str(String)`:
+[`StructValue::script_read`] returns a [`ScriptVal`] for each field — integer fields as `ScriptVal::Integer(i64)`, `f32`/`f64` fields as `ScriptVal::Number(f64)`, `cstr` fields as `ScriptVal::Str(String)`:
 
 ```rust
 if let Some(sv) = ret.as_struct_value() {
     for fi in 0..sv.field_count() {
         match sv.script_read(fi).unwrap() {
-            ScriptVal::Number(n) => write_back_number(fi, n),
-            ScriptVal::Str(s)    => write_back_string(fi, s),
+            ScriptVal::Integer(n) => write_back_integer(fi, n),
+            ScriptVal::Number(n)  => write_back_number(fi, n),
+            ScriptVal::Str(s)     => write_back_string(fi, s),
+            _ => {}
         }
     }
 }

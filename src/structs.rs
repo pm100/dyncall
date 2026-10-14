@@ -547,7 +547,10 @@ impl StructValue {
     ///
     /// For `cstr` fields the stored pointer is followed to produce an owned
     /// `String`. Pointer fields return `ScriptVal::Pointer` (or `Nil` if null).
-    /// All other numeric field types are widened to `f64` as `ScriptVal::Number`.
+    /// Integer field types (`u8`..`u64`, `i8`..`i64`, `bool`) are returned as
+    /// `ScriptVal::Integer` without precision loss (`u64` values above `i64::MAX` wrap,
+    /// as for return values and output pointers); `f32` / `f64` fields are
+    /// returned as `ScriptVal::Number`.
     pub fn script_read(&self, index: usize) -> Result<ScriptVal> {
         let field_type = self.layout.fields.get(index)
             .map(|f| &f.arg_type)
@@ -563,6 +566,8 @@ impl StructValue {
                 let p = self.read_field::<*mut c_void>(index)?;
                 Ok(ScriptVal::from(p))
             }
+            ArgType::Char | ArgType::I8 | ArgType::I16 | ArgType::U16 | ArgType::I32 | ArgType::U32
+            | ArgType::I64 | ArgType::U64 => Ok(ScriptVal::Integer(self.read_field_coerced::<i64>(index)?)),
             _ => {
                 let n = self.read_field_coerced::<f64>(index)?;
                 Ok(ScriptVal::Number(n))
@@ -579,11 +584,14 @@ impl StructValue {
 /// returned by [`StructValue::script_read`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptVal {
-    /// Numeric value — floats and small integers (BASIC, Lox, JS-style runtimes).
-    /// All integer and float C types are widened to `f64` on read.
+    /// Floating point value, and the numeric type of runtimes that store every number as
+    /// an `f64` (BASIC, Lox, JS-style). Floating point C types (`f32` / `f64`) are always
+    /// read as `Number`; integer C types are read as [`ScriptVal::Integer`].
+    /// On input, both variants are coerced to the declared type.
     Number(f64),
     /// Integer value without float precision loss (Forth, PostScript-style runtimes).
-    /// Preferred over `Number` when the runtime uses `i64` as its stack type.
+    /// Integer C types are read as this (return values, output pointers and struct fields);
+    /// runtimes with a single `f64` number type should convert with `n as f64`.
     Integer(i64),
     /// String value (`cstr` pointer followed to produce an owned `String`).
     Str(String),

@@ -1452,7 +1452,7 @@ mod test {
         inv.push_script_struct(&[ScriptVal::Integer(7), ScriptVal::Integer(8)]).unwrap();
         let r = inv.call_scripted().unwrap();
         assert_eq!(r.return_val, ScriptVal::Integer(18));
-        assert_eq!(r.struct_outputs, vec![(0, vec![ScriptVal::Number(8.0), ScriptVal::Number(10.0)])]);
+        assert_eq!(r.struct_outputs, vec![(0, vec![ScriptVal::Integer(8), ScriptVal::Integer(10)])]);
     }
 
     /// #20: omitted trailing fields of a `*{...}` argument are zero-filled.
@@ -1464,7 +1464,7 @@ mod test {
         let mut inv = def.prep();
         inv.push_script_struct(&[ScriptVal::Integer(5)]).unwrap();
         let r = inv.call_scripted().unwrap();
-        assert_eq!(r.struct_outputs[0].1, vec![ScriptVal::Number(6.0), ScriptVal::Number(2.0)]);
+        assert_eq!(r.struct_outputs[0].1, vec![ScriptVal::Integer(6), ScriptVal::Integer(2)]);
     }
 
     /// #20: misuse is an error, not UB.
@@ -1551,5 +1551,45 @@ mod test {
         let new = DynCaller::define_function(&format!("{LIBC}|abs|T24Re|i32|")).unwrap();
         assert!(matches!(old.get_arg_type(0), crate::ArgType::I32));
         assert!(matches!(new.get_arg_type(0), crate::ArgType::I64));
+    }
+
+    /// #21: integer struct fields read as `Integer` (exactly, with their sign); floats as `Number`.
+    #[test]
+    fn test_script_read_integer_fields_are_integers() {
+        use crate::{ArgType, ScriptVal, StructType, StructValue};
+        let st = StructType::new(vec![
+            ArgType::I8,
+            ArgType::U16,
+            ArgType::I32,
+            ArgType::I64,
+            ArgType::U64,
+            ArgType::F32,
+            ArgType::F64,
+            ArgType::Char,
+        ])
+        .unwrap();
+        let mut sv = StructValue::from_struct_type(&st);
+        sv.push_field(&-5i8).unwrap();
+        sv.push_field(&65535u16).unwrap();
+        sv.push_field(&-123456i32).unwrap();
+        sv.push_field(&((1i64 << 53) + 1)).unwrap(); // not representable as f64
+        sv.push_field(&u64::MAX).unwrap();
+        sv.push_field(&1.5f32).unwrap();
+        sv.push_field(&2.25f64).unwrap();
+        sv.push_field(&200u8).unwrap();
+        let read: Vec<ScriptVal> = (0..8).map(|i| sv.script_read(i).unwrap()).collect();
+        assert_eq!(
+            read,
+            vec![
+                ScriptVal::Integer(-5),
+                ScriptVal::Integer(65535),
+                ScriptVal::Integer(-123456),
+                ScriptVal::Integer((1i64 << 53) + 1),
+                ScriptVal::Integer(-1), // u64::MAX wraps, like return values and output pointers
+                ScriptVal::Number(1.5),
+                ScriptVal::Number(2.25),
+                ScriptVal::Integer(200),
+            ]
+        );
     }
 }

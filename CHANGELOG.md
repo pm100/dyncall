@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `StructValue::script_read` now returns `ScriptVal::Integer` for integer struct fields
+  (previously `ScriptVal::Number(f64)`, which lost precision above 2^53 and made
+  integer-typed runtimes re-derive integerness from the field type). Floating point
+  fields still read as `Number`. Adapters that match both variants are unaffected;
+  adapters that only handled `Number` for struct fields must handle `Integer`. (#21)
+
 ### Added
 - `Invocation::push_script_struct` and `ScriptResult::struct_outputs`: struct (`{...}`)
   and pointer-to-struct (`*{...}`) arguments can now be pushed from a list of

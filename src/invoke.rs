@@ -650,8 +650,8 @@ pub struct ScriptResult {
     pub outputs: Vec<(usize, ScriptVal)>,
     /// Final field values of every `*{...}` argument pushed with
     /// [`push_script_struct`](Invocation::push_script_struct), as `(arg_index, fields)` in
-    /// push order. Integer fields are read as [`ScriptVal::Number`] (see
-    /// [`StructValue::script_read`]).
+    /// push order, read with [`StructValue::script_read`] (integer fields as
+    /// [`ScriptVal::Integer`], floating point fields as [`ScriptVal::Number`]).
     pub struct_outputs: Vec<(usize, Vec<ScriptVal>)>,
 }
 
