@@ -350,6 +350,33 @@ Structs in dyncall descriptors look like `{i32,f64,cstr}` (by value) or
 `*{i32,f64}` (pointer — written back after the call). The most adapter-friendly
 path uses `ScriptVal`:
 
+**Simplest path: `push_script_struct`**
+
+Hand the invocation the field values in declaration order; it builds and owns
+the struct (no slot storage that outlives the call, no `push_mut_arg` borrows).
+After `call_scripted`, the final field values of every `*{...}` argument are in
+`ScriptResult::struct_outputs` as `(arg_index, fields)`:
+
+```rust
+for (i, arg) in script_args.iter().enumerate() {
+    match fdef.get_arg_type(i) {
+        t if t.struct_type().is_some() => {
+            let fields: Vec<ScriptVal> = my_array_to_script_vals(arg);
+            inv.push_script_struct(&fields)?;
+        }
+        _ => inv.push_script_val(to_script_val(arg))?,
+    }
+}
+let result = inv.call_scripted()?;
+for (arg_index, fields) in result.struct_outputs {
+    write_back_into_script_array(&script_args[arg_index], &fields);
+}
+```
+
+Struct layouts that appear in many descriptors can be named once with
+`DynCaller::define_type("SDL_Rect", "{i32,i32,i32,i32}")` and then written as
+`SDL_Rect` / `*SDL_Rect`.
+
 **Inspecting struct field layout:**
 
 Use `ArgType::struct_type()` to query how many fields a struct has and what

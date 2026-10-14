@@ -17,6 +17,9 @@ use crate::dylib::DynamicLibrary;
 use crate::invoke::Invocation;
 use crate::structs::{StructType, StructValue};
 static DYNCALLER: LazyLock<Mutex<DynCaller>> = LazyLock::new(|| Mutex::new(DynCaller::new()));
+/// Named types registered with [`DynCaller::define_type`]. Kept apart from `DYNCALLER` so that
+/// parsing a descriptor (which looks names up here) never needs the library-cache lock.
+static TYPES: LazyLock<Mutex<HashMap<String, ArgType>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A singleton that manages loaded dynamic libraries.
 ///
@@ -79,6 +82,7 @@ impl FuncDef {
             arg_vals: Vec::with_capacity(self.inner.arg_types.len() * 4),
             last_errno: None,
             script_output_slots: Vec::new(),
+            script_struct_slots: Vec::new(),
         }
     }
     /// Returns the number of declared arguments.
@@ -337,6 +341,48 @@ impl DynCaller {
             }),
         })
     }
+    /// Register a named type that descriptors can use anywhere a type token is accepted.
+    ///
+    /// `definition` is any type in descriptor syntax (a struct, a pointer, a scalar, or
+    /// another alias); it is parsed immediately, so later redefinitions of the names it
+    /// mentions do not affect it. Aliases are process-wide, like the library cache.
+    /// Redefining an existing alias replaces it for functions defined afterwards;
+    /// already-defined [`FuncDef`]s keep the type they were built with.
+    ///
+    /// ```rust
+    /// use dyncall::DynCaller;
+    /// DynCaller::define_type("Point", "{i32,i32}").unwrap();
+    /// // `*Point` is a pointer to the struct, `Point` the struct by value.
+    /// # #[cfg(target_os = "windows")] const LIBC: &str = "msvcrt.dll";
+    /// # #[cfg(target_os = "macos")] const LIBC: &str = "libSystem.B.dylib";
+    /// # #[cfg(target_os = "linux")] const LIBC: &str = "libc.so.6";
+    /// let def = DynCaller::define_function(&format!("{LIBC}|memcmp|*Point,*Point,usize|i32|")).unwrap();
+    /// assert_eq!(def.get_arg_count(), 3);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The name must be an identifier (`[A-Za-z_][A-Za-z0-9_]*`) and must not be one of the
+    /// built-in type tokens (`i32`, `ptr`, `cstr`, ...); the definition must parse.
+    pub fn define_type(name: &str, definition: &str) -> Result<()> {
+        let valid = name
+            .chars()
+            .enumerate()
+            .all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()));
+        if name.is_empty() || !valid {
+            bail!("invalid type name '{}': must be an identifier", name);
+        }
+        if is_builtin_type_name(name) {
+            bail!("'{}' is a built-in type and cannot be redefined", name);
+        }
+        let parsed = parse_arg_type(definition)?;
+        if matches!(parsed, ArgType::Void) {
+            bail!("a type alias cannot be void");
+        }
+        TYPES.lock().unwrap_or_else(|p| p.into_inner()).insert(name.to_string(), parsed);
+        Ok(())
+    }
+
     /// Set or clear the process-wide default coerce flag.
     ///
     /// When enabled, every subsequent call to [`DynCaller::define_function`]
@@ -507,8 +553,20 @@ fn parse_arg_type(at: &str) -> Result<ArgType> {
         "obuff" => ArgType::OByteBuffer(parse_length_def(qualifier)?),
         "buff" => ArgType::ByteBuffer,
         "void" => ArgType::Void,
-        _ => bail!("unknown type {}", at),
+        name => match TYPES.lock().unwrap_or_else(|p| p.into_inner()).get(name) {
+            Some(t) if qualifier.is_none() => t.clone(),
+            _ => bail!("unknown type {}", at),
+        },
     })
+}
+
+/// Built-in type tokens (and `ocstr`/`obuff`/`buff` qualifier bases) that aliases may not shadow.
+fn is_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "bool" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" | "usize" | "size_t" | "isize"
+            | "ssize_t" | "clong" | "culong" | "f32" | "f64" | "ptr" | "cstr" | "ocstr" | "obuff" | "buff" | "void"
+    )
 }
 
 fn parse_struct_type(definition: &str) -> Result<StructType> {

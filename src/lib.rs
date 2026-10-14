@@ -54,6 +54,21 @@
 //! | `{T1,T2,...}`   | flat struct passed by value                        |
 //! | `*{T1,T2,...}`  | pointer to a flat struct                           |
 //! | `void`          | no return value                                    |
+//! | `Name`          | alias registered with [`DynCaller::define_type`]   |
+//!
+//! ### Named types
+//!
+//! Struct layouts (and any other type) can be given a name once and reused in
+//! descriptors:
+//!
+//! ```no_run
+//! use dyncall::DynCaller;
+//! DynCaller::define_type("SDL_Rect", "{i32,i32,i32,i32}").unwrap();
+//! // `SDL_Rect` is the struct by value, `*SDL_Rect` a pointer to it.
+//! let def = DynCaller::define_function(
+//!     "SDL2.dll|SDL_RenderFillRect|ptr,*SDL_Rect|i32|"
+//! ).unwrap();
+//! ```
 //!
 //! ### Flags
 //!

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Invocation::push_script_struct` and `ScriptResult::struct_outputs`: struct (`{...}`)
+  and pointer-to-struct (`*{...}`) arguments can now be pushed from a list of
+  `ScriptVal`s. The invocation owns the struct, so scripting adapters no longer need
+  their own slot storage or `push_mut_arg` borrow juggling, and the final field values
+  of `*{...}` arguments come back in `struct_outputs`. (#20)
+- `DynCaller::define_type(name, definition)`: named type aliases usable in descriptors
+  (`ptr,*SDL_Rect`), including nested in other types. (#24)
+
 ### Fixed
 - `FuncDef` no longer leaves dangling pointers in its `ffi_cif` after being
   cloned or moved (use-after-free). The cif, argument-type array and struct

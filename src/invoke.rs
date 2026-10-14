@@ -111,6 +111,9 @@ pub struct Invocation<'a> {
     pub(crate) last_errno: Option<i32>,
     /// Output slots allocated by push_script_val; (arg_index, slot).
     pub(crate) script_output_slots: Vec<(usize, ScriptOutputSlot)>,
+    /// Pointer-to-struct arguments owned by the invocation (see `push_script_struct`);
+    /// (arg_index, struct). Boxed so the bytes keep a stable address while the callee runs.
+    pub(crate) script_struct_slots: Vec<(usize, Box<StructValue>)>,
 }
 impl<'a> Invocation<'a> {
     /// Push an input argument.
@@ -303,7 +306,7 @@ impl<'a> Invocation<'a> {
             }
             // ── struct — not supported via ScriptVal ──────────────────────
             ArgType::Struct(_) | ArgType::Pointer(_) => {
-                bail!("push_script_val: struct arguments must use push_arg with a StructValue");
+                bail!("push_script_val: struct arguments must use push_script_struct (or push_arg with a StructValue)");
             }
             // ── scalar numeric ────────────────────────────────────────────
             _ => match &val {
@@ -313,6 +316,42 @@ impl<'a> Invocation<'a> {
                 other => bail!("push_script_val: cannot push {:?} for scalar arg {:?}", other, declared),
             },
         };
+        self.finish_push(argp, val_count)
+    }
+
+    /// Push the next argument, a struct (`{...}`) or pointer to a struct (`*{...}`), from a
+    /// list of field values.
+    ///
+    /// The scripted counterpart of [`push_script_val`](Invocation::push_script_val) for
+    /// struct arguments: the invocation builds and owns the [`StructValue`], so adapters need
+    /// no separate storage that outlives the call and no borrow juggling. Fields are given
+    /// in declaration order and coerced to the declared field types
+    /// ([`StructValue::from_script_vals`]); fields left out stay zero for `*{...}`
+    /// arguments, while a by-value struct must be given in full.
+    ///
+    /// For `*{...}` arguments the callee may modify the struct. After
+    /// [`call_scripted`](Invocation::call_scripted) the final field values are in
+    /// [`ScriptResult::struct_outputs`] under this argument's index.
+    pub fn push_script_struct(&mut self, fields: &[ScriptVal]) -> Result<()> {
+        self.check_arg_count()?;
+        let arg_index = self.arg_ptrs.len();
+        let declared = self.func_def.inner.arg_types[arg_index].clone();
+        let is_ptr = match &declared {
+            ArgType::Struct(_) => false,
+            ArgType::Pointer(inner) if matches!(inner.as_ref(), ArgType::Struct(_)) => true,
+            other => bail!("push_script_struct: argument {} is declared as {:?}, not a struct", arg_index, other),
+        };
+        let sv = StructValue::from_script_vals(&declared, fields)?;
+        if !is_ptr {
+            return self.push_arg(&sv);
+        }
+        let mut slot = Box::new(sv);
+        let ptr = slot.as_mut_ptr();
+        let val_count = self.arg_vals.len();
+        self.arg_vals.push(ArgVal::Pointer(ptr));
+        self.arg_vals.push(ArgVal::Pointer(ptr));
+        let argp = self.arg_vals[val_count + 1].payload_ptr();
+        self.script_struct_slots.push((arg_index, slot));
         self.finish_push(argp, val_count)
     }
 
@@ -609,6 +648,11 @@ pub struct ScriptResult {
     /// position of the argument in the function's parameter list.  Entries
     /// appear in push order (ascending `arg_index`).
     pub outputs: Vec<(usize, ScriptVal)>,
+    /// Final field values of every `*{...}` argument pushed with
+    /// [`push_script_struct`](Invocation::push_script_struct), as `(arg_index, fields)` in
+    /// push order. Integer fields are read as [`ScriptVal::Number`] (see
+    /// [`StructValue::script_read`]).
+    pub struct_outputs: Vec<(usize, Vec<ScriptVal>)>,
 }
 
 impl<'a> Invocation<'a> {
@@ -684,6 +728,15 @@ impl<'a> Invocation<'a> {
             .map(|(idx, slot)| (idx, slot.to_script_val()))
             .collect();
 
-        Ok(ScriptResult { return_val, return_struct, outputs })
+        let struct_outputs = self
+            .script_struct_slots
+            .drain(..)
+            .map(|(idx, sv)| {
+                let fields = (0..sv.field_count()).map(|i| sv.script_read(i)).collect::<Result<Vec<_>>>()?;
+                Ok((idx, fields))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ScriptResult { return_val, return_struct, outputs, struct_outputs })
     }
 }
